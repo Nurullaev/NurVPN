@@ -23,7 +23,7 @@ if not os.environ.get("LC_ALL", "").endswith("UTF-8"):
 BACK_DIR = os.path.expanduser("~/.solobot_backup")
 TEMP_DIR = os.path.expanduser("~/.solobot_tmp")
 PROJECT_DIR = os.path.abspath(os.path.dirname(__file__))
-GITHUB_REPO = "https://github.com/Vladless/Solo_bot"
+GITHUB_REPO = "https://github.com/Nurullaev/NurVPN"
 SERVICE_NAME = BOT_SERVICE
 
 console = Console()
@@ -90,7 +90,7 @@ def get_local_version():
 
 def get_remote_version(branch="main"):
     try:
-        url = f"https://raw.githubusercontent.com/Vladless/Solo_bot/{branch}/bot.py"
+        url = f"https://raw.githubusercontent.com/Nurullaev/NurVPN/{branch}/bot.py"
         response = requests.get(url, timeout=10)
         if response.status_code == 200:
             for line in response.text.splitlines():
@@ -147,7 +147,7 @@ def update_from_release():
 
     try:
         response = requests.get(
-            "https://api.github.com/repos/Vladless/Solo_bot/releases", timeout=10
+            "https://api.github.com/repos/Nurullaev/NurVPN/releases", timeout=10
         )
         releases = response.json()[:3]
         tag_choices = [r["tag_name"] for r in releases]
