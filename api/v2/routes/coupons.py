@@ -1,11 +1,10 @@
 from fastapi import APIRouter
 
-from api.routes.base_crud import generate_crud_router
-from api.schemas import CouponBase, CouponResponse, CouponUpdate
+from api.v2.base_crud import generate_crud_router
+from api.v2.schemas import CouponBase, CouponResponse, CouponUpdate
 from database.models import Coupon
 
-
-router: APIRouter = generate_crud_router(
+router = generate_crud_router(
     model=Coupon,
     schema_response=CouponResponse,
     schema_create=CouponBase,

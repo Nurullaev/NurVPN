@@ -4,6 +4,7 @@ from typing import Any
 
 from aiogram import BaseMiddleware
 from aiogram.types import CallbackQuery, Message, TelegramObject, Update
+from cachetools import TTLCache
 from pytz import timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,12 +16,11 @@ from logger import logger
 
 TZ = timezone("Europe/Moscow")
 _BAN_CACHE_TTL = 30
-_ban_cache: dict[int, tuple[float, dict | None]] = {}
+_ban_cache: TTLCache[int, tuple[float, dict | None]] = TTLCache(maxsize=50_000, ttl=_BAN_CACHE_TTL)
 
 
 class BanCheckerMiddleware(BaseMiddleware):
-    def __init__(self, session_factory: Callable[[], AsyncSession] | None = None) -> None:
-        self.session_factory = session_factory
+    """Проверка банов."""
 
     async def __call__(
         self,

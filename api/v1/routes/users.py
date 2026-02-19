@@ -5,8 +5,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.depends import get_session, verify_admin_token
-from api.routes.base_crud import generate_crud_router
-from api.schemas.users import UserBase, UserResponse, UserUpdate
+from api.v1.routes.base_crud import generate_crud_router
+from api.v1.schemas.users import UserBase, UserResponse, UserUpdate
 from database import delete_user_data, get_servers
 from database.models import Key, User
 from handlers.keys.operations import delete_key_from_cluster

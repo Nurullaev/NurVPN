@@ -28,6 +28,7 @@ from database import (
     update_balance,
 )
 from handlers.buttons import BACK, PAY_2
+from handlers.payments.payment_links import register_payment_creator
 from handlers.payments.utils import send_payment_success_notification
 from handlers.texts import DEFAULT_PAYMENT_MESSAGE, ENTER_SUM, PAYMENT_OPTIONS
 from handlers.utils import edit_or_send_message
@@ -234,19 +235,14 @@ async def freekassa_webhook(request: web.Request):
             return web.Response(status=400, text="Invalid parameter format")
 
         async with async_session_maker() as session:
-
             existing = await get_payment_by_payment_id(session, merchant_order_id)
             if existing and existing.get("status") == "success":
-                logger.warning(
-                    f"[Freekassa] Повторный webhook. Платёж уже обработан: order_id={merchant_order_id}"
-                )
+                logger.warning(f"[Freekassa] Повторный webhook. Платёж уже обработан: order_id={merchant_order_id}")
                 return web.Response(text="YES")
 
             await update_balance(session, tg_id_int, amount_float)
             await send_payment_success_notification(tg_id_int, amount_float, session)
-            await add_payment(
-                session, tg_id_int, amount_float, "freekassa", payment_id=merchant_order_id
-            )
+            await add_payment(session, tg_id_int, amount_float, "freekassa", payment_id=merchant_order_id)
             await clear_temporary_data(session, tg_id_int)
 
         logger.info(f"Payment processed successfully. User: {tg_id_int}, Amount: {amount_float}")
@@ -351,3 +347,21 @@ async def handle_custom_amount_input(
             text="Произошла ошибка при создании платежа. Попробуйте позже.",
             reply_markup=types.InlineKeyboardMarkup(),
         )
+
+
+async def create_link(
+    session: AsyncSession,
+    tg_id: int,
+    amount: float,
+    currency: str,
+    success_url: str | None,
+    failure_url: str | None,
+) -> tuple[str, str]:
+    if currency not in ("RUB", "USD"):
+        raise ValueError("Freekassa поддерживает только RUB или USD")
+    order_id = f"order_{tg_id}_{int(amount)}_{hash(str(tg_id) + str(amount))}"
+    url = generate_payment_link(amount, order_id, tg_id, currency)
+    return (url, order_id)
+
+
+register_payment_creator("FREEKASSA", create_link)

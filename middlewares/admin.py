@@ -3,6 +3,7 @@ from typing import Any
 
 from aiogram import BaseMiddleware
 from aiogram.types import CallbackQuery, Message, TelegramObject
+from cachetools import TTLCache
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,8 +11,12 @@ from config import ADMIN_ID
 from database.models import Admin
 
 
+_ADMIN_CACHE_TTL = 60
+_admin_cache: TTLCache[int, bool] = TTLCache(maxsize=10_000, ttl=_ADMIN_CACHE_TTL)
+
+
 class AdminMiddleware(BaseMiddleware):
-    """Проверяет, является ли пользователь администратором."""
+    """Проверяет, является ли пользователь администратором. Сессию не создаёт — только data['session']."""
 
     _admin_ids: set[int] = set(ADMIN_ID) if isinstance(ADMIN_ID, list | tuple) else {ADMIN_ID}
 
@@ -50,10 +55,16 @@ class AdminMiddleware(BaseMiddleware):
             if user_id in self._admin_ids:
                 return True
 
+            if user_id in _admin_cache:
+                return _admin_cache[user_id]
+
             if not session:
+                _admin_cache[user_id] = False
                 return False
 
             result = await session.execute(select(Admin).where(Admin.tg_id == user_id))
-            return result.scalar_one_or_none() is not None
+            is_admin = result.scalar_one_or_none() is not None
+            _admin_cache[user_id] = is_admin
+            return is_admin
         except Exception:
             return False

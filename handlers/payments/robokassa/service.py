@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import ROBOKASSA_LOGIN, ROBOKASSA_PASSWORD1, ROBOKASSA_PASSWORD2, ROBOKASSA_TEST_MODE
 from database import add_payment
+from handlers.payments.payment_links import register_payment_creator
 
 
 def _build_receipt(amount: float, sno: str = "usn_income") -> dict:
@@ -85,3 +86,21 @@ def check_payment_signature(params) -> bool:
     base = f"{out_sum}:{inv_id}:{ROBOKASSA_PASSWORD2}{shp_suffix}"
     expected_sig = hashlib.md5(base.encode("utf-8")).hexdigest().upper()
     return received_sig == expected_sig
+
+
+async def create_link(
+    session: AsyncSession,
+    tg_id: int,
+    amount: float,
+    currency: str,
+    success_url: str | None,
+    failure_url: str | None,
+) -> tuple[str, str]:
+    if currency != "RUB":
+        raise ValueError("Robokassa поддерживает только RUB")
+    amount_val = int(amount) if amount == int(amount) else amount
+    url, pid = await create_and_store_robokassa_payment(session, tg_id, amount_val, "Пополнение баланса", inv_id=0)
+    return (url, pid)
+
+
+register_payment_creator("ROBOKASSA", create_link)

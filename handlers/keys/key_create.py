@@ -408,9 +408,7 @@ async def back_to_subgroup_tariffs(callback: CallbackQuery, state: FSMContext, s
         gc = tariffs_for_cluster[0].get("group_code")
         if gc:
             tariffs = await get_tariffs(session, group_code=gc)
-            filtered = [
-                t for t in tariffs if t.get("subgroup_title") == subgroup and t.get("is_active")
-            ]
+            filtered = [t for t in tariffs if t.get("subgroup_title") == subgroup and t.get("is_active")]
 
     if not filtered:
         await back_to_tariff_group_list(callback, state, session)

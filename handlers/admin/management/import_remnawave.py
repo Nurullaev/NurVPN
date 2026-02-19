@@ -26,7 +26,8 @@ def extract_tg_id_from_username(value: str | None) -> int | None:
         return None
 
     value = value.strip()
-    match = re.search(r"_(\d+)(?:\D|$)", value)
+
+    match = re.search(r"[-_](\d+)(?:\D|$)", value)
     if not match:
         return None
 

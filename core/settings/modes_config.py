@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.models import Setting
 
+from database import settings_cache
 from ..defaults import DEFAULT_MODES_CONFIG
 
 
@@ -55,3 +56,4 @@ async def update_modes_config(session: AsyncSession, new_values: dict[str, bool]
 
     MODES_CONFIG.clear()
     MODES_CONFIG.update(modes_config)
+    settings_cache.update("MODES_CONFIG", modes_config)

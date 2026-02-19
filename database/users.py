@@ -1,5 +1,6 @@
 from datetime import datetime
 
+from cachetools import TTLCache
 from sqlalchemy import delete, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
@@ -19,6 +20,13 @@ from database.models import (
     User,
 )
 from logger import logger
+
+_SNAPSHOT_CACHE: TTLCache[int, tuple[int, int]] = TTLCache(maxsize=150_000, ttl=30)
+_EXISTS_CACHE: TTLCache[int, bool] = TTLCache(maxsize=150_000, ttl=60)
+
+
+def invalidate_user_snapshot(tg_id: int) -> None:
+    _SNAPSHOT_CACHE.pop(tg_id, None)
 
 
 async def add_user(
@@ -53,6 +61,7 @@ async def add_user(
             return False
         if commit:
             await session.commit()
+        _EXISTS_CACHE[tg_id] = True
         logger.info(f"[DB] Новый пользователь добавлен: {tg_id} (source: {source_code})")
         return True
     except SQLAlchemyError as e:
@@ -82,9 +91,15 @@ async def update_balance(session: AsyncSession, tg_id: int, amount: float) -> No
 
 
 async def check_user_exists(session: AsyncSession, tg_id: int) -> bool:
+    try:
+        return _EXISTS_CACHE[tg_id]
+    except KeyError:
+        pass
     stmt = select(exists().where(User.tg_id == tg_id))
     result = await session.execute(stmt)
-    return result.scalar()
+    value = result.scalar()
+    _EXISTS_CACHE[tg_id] = value
+    return value
 
 
 async def get_balance(session: AsyncSession, tg_id: int) -> float:
@@ -107,6 +122,7 @@ async def update_trial(session: AsyncSession, tg_id: int, status: int):
     try:
         await session.execute(update(User).where(User.tg_id == tg_id).values(trial=status))
         await session.commit()
+        invalidate_user_snapshot(tg_id)
         logger.info(f"[DB] Триал статус обновлён для пользователя {tg_id}: {status}")
     except SQLAlchemyError as e:
         logger.error(f"[DB] Ошибка при обновлении триала пользователя {tg_id}: {e}")
@@ -158,6 +174,7 @@ async def upsert_user(
             if row is None:
                 return None
             await session.commit()
+            _EXISTS_CACHE[tg_id] = True
             return dict(row)
 
         res = await session.execute(
@@ -187,6 +204,7 @@ async def upsert_user(
         )
         row = res.mappings().one()
         await session.commit()
+        _EXISTS_CACHE[tg_id] = True
         return dict(row)
     except SQLAlchemyError as e:
         logger.error(f"[DB] Ошибка при UPSERT пользователя {tg_id}: {e}")
@@ -222,16 +240,22 @@ async def delete_user_data(session: AsyncSession, tg_id: int):
 async def mark_trial_extended(tg_id: int, session: AsyncSession):
     await session.execute(update(User).where(User.tg_id == tg_id).values(trial=-1))
     await session.commit()
+    invalidate_user_snapshot(tg_id)
 
 
 async def get_user_snapshot(session: AsyncSession, tg_id: int) -> tuple[int, int] | None:
+    try:
+        return _SNAPSHOT_CACHE[tg_id]
+    except KeyError:
+        pass
     keys_count_sq = select(func.count(Key.client_id)).where(Key.tg_id == tg_id).scalar_subquery()
-
     res = await session.execute(select(func.coalesce(User.trial, 0), keys_count_sq).where(User.tg_id == tg_id))
     row = res.first()
     if row is None:
         return None
-    return int(row[0]), int(row[1])
+    value = (int(row[0]), int(row[1]))
+    _SNAPSHOT_CACHE[tg_id] = value
+    return value
 
 
 async def upsert_source_if_empty(

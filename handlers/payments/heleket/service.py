@@ -30,6 +30,7 @@ from handlers.payments.currency_rates import (
     pick_currency,
     to_rub,
 )
+from handlers.payments.payment_links import register_payment_creator
 from handlers.payments.keyboards import (
     build_amounts_keyboard,
     parse_amount_from_callback,
@@ -420,3 +421,26 @@ async def generate_heleket_payment_link(
     except Exception as e:
         logger.error(f"Error creating Heleket payment: {e}")
         return "https://heleket.com/"
+
+
+async def create_link(
+    session: AsyncSession,
+    tg_id: int,
+    amount: float,
+    currency: str,
+    success_url: str | None,
+    failure_url: str | None,
+) -> tuple[str, str | None]:
+    method = HELEKET_METHODS.get("crypto")
+    if not method or not method.get("enable"):
+        raise ValueError("Heleket недоступен")
+    amount_int = int(amount)
+    if amount_int < 10:
+        raise ValueError("Минимальная сумма для Heleket — 10₽")
+    url = await generate_heleket_payment_link(amount_int, tg_id, method, session)
+    if not url or url == "https://heleket.com/":
+        raise ValueError("Не удалось создать платёж Heleket")
+    return (url, None)
+
+
+register_payment_creator("HELEKET", create_link)

@@ -508,11 +508,7 @@ async def render_user_config_screen(
     is_renew_mode = data.get("renew_mode") == "renew"
     confirm_prefix = "cfg_renew_confirm" if is_renew_mode else "cfg_user_confirm"
 
-    back_callback = (
-        "back_to_subgroup_tariffs"
-        if data.get("tariff_subgroup_hash")
-        else "back_to_tariff_group_list"
-    )
+    back_callback = "back_to_subgroup_tariffs" if data.get("tariff_subgroup_hash") else "back_to_tariff_group_list"
     builder.row(
         InlineKeyboardButton(
             text=CONFIG_PAY_BUTTON_TEXT.format(amount=price_text),

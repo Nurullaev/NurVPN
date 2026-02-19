@@ -5,6 +5,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.models import Key, User
+from database.users import invalidate_user_snapshot
 from logger import logger
 
 
@@ -81,6 +82,7 @@ async def store_key(
             logger.info(f"[Store Key] Ключ создан: tg_id={tg_id}, client_id={client_id}, server_id={server_id}")
 
         await session.commit()
+        invalidate_user_snapshot(tg_id)
 
     except SQLAlchemyError as e:
         logger.error(f"❌ Ошибка при сохранении ключа: {e}")
@@ -157,10 +159,18 @@ async def get_key_count(session: AsyncSession, tg_id: int) -> int:
 
 
 async def delete_key(session: AsyncSession, identifier: int | str, commit: bool = True):
-    stmt = delete(Key).where(Key.tg_id == identifier if str(identifier).isdigit() else Key.client_id == identifier)
+    tg_id_for_cache = None
+    if isinstance(identifier, str):
+        res = await session.execute(select(Key.tg_id).where(Key.client_id == identifier).limit(1))
+        tg_id_for_cache = res.scalar_one_or_none()
+    else:
+        tg_id_for_cache = identifier
+    stmt = delete(Key).where(Key.tg_id == identifier if isinstance(identifier, int) else Key.client_id == identifier)
     await session.execute(stmt)
     if commit:
         await session.commit()
+    if tg_id_for_cache is not None:
+        invalidate_user_snapshot(tg_id_for_cache)
     logger.info(f"Ключ с идентификатором {identifier} удалён")
 
 

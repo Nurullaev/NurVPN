@@ -2,6 +2,7 @@ from .bans import *
 from .coupons import *
 from .db import async_session_maker
 from .gifts import *
+from . import identities
 from .hot_leads import *
 from .init_db import *
 from .keys import *
@@ -9,6 +10,7 @@ from .notifications import *
 from .payments import *
 from .referrals import *
 from .servers import *
+from .settings_cache import settings_cache
 from .statistics import *
 from .tariffs import *
 from .temporary_data import *

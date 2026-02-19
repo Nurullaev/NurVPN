@@ -73,9 +73,7 @@ async def process_callback_view_profile(
         balance_rub,
         getattr(user, "language_code", None),
     )
-    profile_menu_buttons = await run_hooks(
-        "profile_menu", chat_id=chat_id, admin=admin, session=session
-    )
+    profile_menu_buttons = await run_hooks("profile_menu", chat_id=chat_id, admin=admin, session=session)
     text_hooks = await run_hooks(
         "profile_text",
         username=username,

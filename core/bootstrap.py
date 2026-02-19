@@ -1,4 +1,4 @@
-from database import async_session_maker
+from database import async_session_maker, settings_cache
 from database.db import warm_pool
 from database.tariffs import initialize_all_tariff_weights
 
@@ -25,3 +25,4 @@ async def bootstrap() -> None:
         await load_management_config(session)
         await load_tariffs_config(session)
         await session.commit()
+        await settings_cache.load(session)

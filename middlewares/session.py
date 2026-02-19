@@ -1,14 +1,74 @@
+import time
+from typing import Any
+
 from aiogram import BaseMiddleware
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from logger import logger
+
+try:
+    from config import LOG_SESSION_DURATION
+except ImportError:
+    LOG_SESSION_DURATION = False
+
+
+async def release_session_early(session: Any) -> bool:
+    if hasattr(session, "release_early"):
+        return await session.release_early()
+    return False
+
+
+class _SessionProxy:
+    __slots__ = ("_session", "_maker", "_released", "_data")
+
+    def __init__(self, session: AsyncSession, maker, data: dict) -> None:
+        self._session = session
+        self._maker = maker
+        self._released = False
+        self._data = data
+
+    async def release_early(self) -> bool:
+        if self._released:
+            return False
+        self._released = True
+        try:
+            await self._session.commit()
+        except Exception:
+            await self._session.rollback()
+        try:
+            await self._session.close()
+        except Exception:
+            pass
+        self._session = None
+        self._data["_session_released_early"] = True
+        return True
+
+    async def _with_short_session(self, method: str, *args, **kwargs):
+        import asyncio
+
+        async with self._maker() as s:
+            result = getattr(s, method)(*args, **kwargs)
+            if asyncio.iscoroutine(result):
+                return await result
+            return result
+
+    def __getattr__(self, name: str):
+        if name in ("_session", "_maker", "_released", "_data", "release_early", "_with_short_session"):
+            raise AttributeError(name)
+        if self._released:
+
+            def _short(*a, **k):
+                return self._with_short_session(name, *a, **k)
+
+            return _short
+        return getattr(self._session, name)
 
 
 class SessionMiddleware(BaseMiddleware):
     def __init__(self, sessionmaker):
         self.sessionmaker = sessionmaker
 
-    async def _rollback(self, session, context: str) -> None:
-        """Attempt rollback so invalid transaction is cleared; log if rollback fails."""
+    async def _rollback(self, session: AsyncSession, context: str) -> None:
         try:
             await session.rollback()
         except Exception as rollback_err:
@@ -24,47 +84,57 @@ class SessionMiddleware(BaseMiddleware):
         if data.get("session"):
             return await handler(event, data)
 
-        session = self.sessionmaker()
-        data["session"] = session
-        committed = False
         handler_name = getattr(handler, "__qualname__", getattr(handler, "__name__", str(handler)))
         event_type = type(event).__name__
+        t0 = time.perf_counter() if LOG_SESSION_DURATION else None
 
-        try:
-            result = await handler(event, data)
+        async with self.sessionmaker() as session:
+            proxy = _SessionProxy(session, self.sessionmaker, data)
+            data["session"] = proxy
+            committed = False
             try:
-                await session.commit()
-                committed = True
-                return result
-            except Exception as commit_err:
+                result = await handler(event, data)
+                if data.get("_session_released_early"):
+                    committed = True
+                    return result
+                try:
+                    await session.commit()
+                    committed = True
+                    return result
+                except Exception as commit_err:
+                    logger.warning(
+                        "Session commit failed, rolling back — handler=%s, event=%s, error=%s: %s",
+                        handler_name,
+                        event_type,
+                        type(commit_err).__name__,
+                        commit_err,
+                        exc_info=True,
+                    )
+                    await self._rollback(session, "commit failure")
+                    return result
+            except Exception as e:
                 logger.warning(
-                    "Session commit failed, rolling back (ошибка не пробрасывается) — handler=%s, event=%s, error=%s: %s",
+                    "Session rollback: ошибка при обработке — handler=%s, event=%s, error=%s: %s",
                     handler_name,
                     event_type,
-                    type(commit_err).__name__,
-                    commit_err,
+                    type(e).__name__,
+                    e,
                     exc_info=True,
                 )
-                await self._rollback(session, "commit failure")
-                return result
-        except Exception as e:
-            logger.warning(
-                "Session rollback: ошибка при обработке — handler=%s, event=%s, error=%s: %s",
-                handler_name,
-                event_type,
-                type(e).__name__,
-                e,
-                exc_info=True,
-            )
-            await self._rollback(session, "handler failure")
-            raise
-        finally:
-            if not committed:
-                try:
-                    await session.rollback()
-                except Exception:
-                    pass
-            try:
-                await session.close()
-            except Exception:
-                pass
+                await self._rollback(session, "handler failure")
+                raise
+            finally:
+                if not committed and not data.get("_session_released_early"):
+                    try:
+                        await session.rollback()
+                    except Exception:
+                        pass
+                if t0 is not None:
+                    duration_ms = int((time.perf_counter() - t0) * 1000)
+                    logger.debug(
+                        "[Session] %s %s handler=%s duration_ms=%d",
+                        event_type,
+                        getattr(event, "update_id", ""),
+                        handler_name,
+                        duration_ms,
+                    )

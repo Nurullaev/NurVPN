@@ -1,10 +1,10 @@
 import time
-
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from aiogram import BaseMiddleware
 from aiogram.types import Message, Update
+from cachetools import TTLCache
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import ADMIN_ID, DISABLE_DIRECT_START
@@ -14,7 +14,7 @@ from logger import logger
 
 
 _TTL = 20
-_cache_user_exists: dict[int, tuple[float, bool]] = {}
+_cache_user_exists: TTLCache[int, tuple[float, bool]] = TTLCache(maxsize=50_000, ttl=_TTL)
 
 
 class DirectStartBlockerMiddleware(BaseMiddleware):
@@ -63,7 +63,7 @@ class DirectStartBlockerMiddleware(BaseMiddleware):
                 return True
 
             cached = _cache_user_exists.get(tg_id)
-            if cached and cached[0] > now:
+            if cached is not None and cached[0] > now:
                 return cached[1]
 
             exists = await check_user_exists(session, tg_id)

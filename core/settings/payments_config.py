@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.models import Setting
 
+from database import settings_cache
 from ..defaults import DEFAULT_PAYMENTS_CONFIG
 
 
@@ -55,3 +56,4 @@ async def update_payments_config(session: AsyncSession, new_values: dict[str, bo
 
     PAYMENTS_CONFIG.clear()
     PAYMENTS_CONFIG.update(payments_config)
+    settings_cache.update("PAYMENTS_CONFIG", payments_config)

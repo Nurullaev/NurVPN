@@ -5,6 +5,7 @@ from typing import Any
 
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject, User
+from cachetools import TTLCache
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,9 +15,11 @@ from logger import logger
 
 
 class UserMiddleware(BaseMiddleware):
-    def __init__(self, debounce_sec: float = 60.0) -> None:
+    def __init__(self, debounce_sec: float = 60.0, cache_maxsize: int = 100_000) -> None:
         self._debounce = float(debounce_sec)
-        self._cache: dict[int, tuple[str, float, float, dict | None]] = {}
+        self._cache: TTLCache[int, tuple[str, float, float, dict | None]] = TTLCache(
+            maxsize=cache_maxsize, ttl=debounce_sec * 2
+        )
 
     async def __call__(
         self,
@@ -75,7 +78,6 @@ class UserMiddleware(BaseMiddleware):
         obj = res.scalar_one_or_none()
         if obj is None:
             return None
-        await session.commit()
         d = obj.__dict__.copy()
         d.pop("_sa_instance_state", None)
         return d

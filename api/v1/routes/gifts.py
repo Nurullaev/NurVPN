@@ -3,8 +3,8 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.depends import get_session, verify_admin_token
-from api.routes.base_crud import generate_crud_router
-from api.schemas import GiftBase, GiftResponse, GiftUpdate, GiftUsageResponse
+from api.v1.routes.base_crud import generate_crud_router
+from api.v1.schemas import GiftBase, GiftResponse, GiftUpdate, GiftUsageResponse
 from database.models import Admin, Gift, GiftUsage
 
 

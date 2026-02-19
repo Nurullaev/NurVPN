@@ -60,6 +60,7 @@ from handlers.texts import (
 from hooks.hook_buttons import insert_hook_buttons
 from hooks.hooks import run_hooks
 from logger import logger
+from middlewares.session import release_session_early
 
 from .admin.panel.keyboard import AdminPanelCallback
 from .refferal import handle_referral_link
@@ -320,10 +321,11 @@ async def show_start_menu(
         module_buttons = await run_hooks("start_menu", chat_id=message.chat.id, session=session)
         kb = insert_hook_buttons(kb, module_buttons)
     except Exception as e:
-        logger.error(f"[Hooks:start_menu] Ошибка вставки кнопок: {e}", exc_info=True)
+        logger.error(f"[Hooks:start_menu] Ошибка вставки кнопов: {e}", exc_info=True)
 
     kb.row(InlineKeyboardButton(text=ABOUT_VPN, callback_data="about_vpn"))
 
+    await release_session_early(session)
     await edit_or_send_message(message, WELCOME_TEXT, reply_markup=kb.as_markup(), media_path=image_path)
 
 

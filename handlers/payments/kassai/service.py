@@ -34,6 +34,7 @@ from handlers.payments.keyboards import (
     pay_keyboard,
     payment_options_for_user,
 )
+from handlers.payments.payment_links import register_payment_creator
 from handlers.payments.providers import get_providers
 from handlers.texts import (
     ENTER_SUM,
@@ -441,3 +442,34 @@ async def generate_kassai_payment_link(
     except Exception as e:
         logger.error(f"Error creating KassaAI order: {e}")
         return "https://fk.life/"
+
+
+def create_link_factory(method_name: str):
+    async def create_link(
+        session: AsyncSession,
+        tg_id: int,
+        amount: float,
+        currency: str,
+        success_url: str | None,
+        failure_url: str | None,
+    ) -> tuple[str, str | None]:
+        if currency != "RUB":
+            raise ValueError("KassaI поддерживает только RUB")
+        method = KASSAI_METHODS.get(method_name)
+        if not method or not method.get("enable"):
+            raise ValueError("Способ оплаты KassaI недоступен")
+        amount_int = int(amount)
+        if method_name == "cards" and amount_int < 50:
+            raise ValueError("Минимальная сумма для карт — 50₽")
+        if method_name == "sbp" and amount_int < 10:
+            raise ValueError("Минимальная сумма для СБП — 10₽")
+        url = await generate_kassai_payment_link(amount_int, tg_id, method, session)
+        if not url or url == "https://fk.life/":
+            raise ValueError("Не удалось создать платёж KassaI")
+        return (url, None)
+
+    return create_link
+
+
+register_payment_creator("KASSAI_CARDS", create_link_factory("cards"))
+register_payment_creator("KASSAI_SBP", create_link_factory("sbp"))

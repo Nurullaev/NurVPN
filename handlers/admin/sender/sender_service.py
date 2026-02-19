@@ -8,6 +8,7 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from database import async_session_maker
 from logger import logger
 
 
@@ -52,9 +53,14 @@ class RateLimiter:
 
 
 class BroadcastService:
-    def __init__(self, bot: Bot, session: AsyncSession, messages_per_second: int = 35) -> None:
+    def __init__(
+        self,
+        bot: Bot,
+        session: AsyncSession | None = None,
+        messages_per_second: int = 35,
+    ) -> None:
         self.bot = bot
-        self.session = session
+        self._session = session
         self.rate_limiter = RateLimiter(max_rate=messages_per_second)
         self.blocked_users = set()
         self.queue = asyncio.Queue()
@@ -151,23 +157,31 @@ class BroadcastService:
                 logger.error(f"❌ Ошибка в воркере рассылки: {e}")
                 await asyncio.sleep(0.1)
 
-    async def _save_blocked_users(self):
+    async def _save_blocked_users(self) -> None:
         if not self.blocked_users:
             return
 
-        try:
+        async def _do_save(session: AsyncSession) -> None:
             from sqlalchemy.dialects.postgresql import insert
 
             from database.models import BlockedUser
 
             values = [{"tg_id": tg_id} for tg_id in self.blocked_users]
             stmt = insert(BlockedUser).values(values).on_conflict_do_nothing(index_elements=[BlockedUser.tg_id])
-            await self.session.execute(stmt)
-            await self.session.commit()
+            await session.execute(stmt)
+            await session.commit()
             logger.info(f"📝 Добавлено {len(self.blocked_users)} пользователей в blocked_users")
+
+        try:
+            if self._session is not None:
+                await _do_save(self._session)
+            else:
+                async with async_session_maker() as session:
+                    await _do_save(session)
         except Exception as e:
             logger.error(f"❌ Ошибка при сохранении заблокированных пользователей: {e}")
-            await self.session.rollback()
+            if self._session is not None:
+                await self._session.rollback()
 
     async def broadcast(self, messages: list[dict], workers: int = 20) -> dict:
         self.is_running = True

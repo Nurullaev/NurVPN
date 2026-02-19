@@ -6,6 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.models import Setting
 
+from database import settings_cache
+
 
 TARIFFS_CONFIG: dict[str, Any] = {
     "ALLOW_DOWNGRADE": True,
@@ -62,6 +64,7 @@ async def update_tariffs_config(session: AsyncSession, new_values: dict[str, Any
 
     TARIFFS_CONFIG.clear()
     TARIFFS_CONFIG.update(tariffs_config)
+    settings_cache.update("TARIFFS_CONFIG", tariffs_config)
 
 
 def calc_extra_devices_price(tariff: dict[str, Any], device_limit: int) -> int:

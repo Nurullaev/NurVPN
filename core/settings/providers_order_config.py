@@ -3,6 +3,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.models import Setting
 
+from database import settings_cache
+
 PROVIDERS_ORDER: dict[str, int] = {}
 
 
@@ -36,3 +38,4 @@ async def update_providers_order(session: AsyncSession, new_order: dict[str, int
 
     PROVIDERS_ORDER.clear()
     PROVIDERS_ORDER.update(new_order)
+    settings_cache.update("PROVIDERS_ORDER", new_order)

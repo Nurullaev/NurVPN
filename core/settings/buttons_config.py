@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.models import Setting
 
+from database import settings_cache
 from ..defaults import DEFAULT_BUTTONS_CONFIG
 
 
@@ -63,3 +64,4 @@ async def update_buttons_config(session: AsyncSession, new_values: dict[str, boo
 
     BUTTONS_CONFIG.clear()
     BUTTONS_CONFIG.update(buttons_config)
+    settings_cache.update("BUTTONS_CONFIG", buttons_config)

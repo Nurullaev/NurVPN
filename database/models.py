@@ -36,10 +36,32 @@ class DictLikeMixin:
         return {column.name: getattr(self, column.name) for column in self.__table__.columns}
 
 
+class Identity(DictLikeMixin, Base):
+    """Слой идентификации: к одному identity можно привязать email и/или Telegram (tg_id)."""
+
+    __tablename__ = "identities"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    email = Column(String(255), unique=True, nullable=True, index=True)
+    tg_id = Column(BigInteger, unique=True, nullable=True, index=True)
+    api_token_hash = Column(String(64), nullable=True, index=True)
+    token_issued_at = Column(DateTime, nullable=True)
+    password_hash = Column(String(64), nullable=True)
+    is_admin = Column(Boolean, nullable=False, server_default=text("false"))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class User(DictLikeMixin, Base):
     __tablename__ = "users"
 
     tg_id = Column(BigInteger, primary_key=True)
+    identity_id = Column(
+        String(36),
+        ForeignKey("identities.id", ondelete="SET NULL", onupdate="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     username = Column(String)
     first_name = Column(String)
     last_name = Column(String)
@@ -162,7 +184,7 @@ class ServerSpecialgroup(DictLikeMixin, Base):
 class Payment(DictLikeMixin, Base):
     __tablename__ = "payments"
 
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     tg_id = Column(BigInteger, ForeignKey("users.tg_id"))
     amount = Column(Float)
     payment_system = Column(String)

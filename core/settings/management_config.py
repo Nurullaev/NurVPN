@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.models import Setting
 
+from database import settings_cache
 from ..defaults import DEFAULT_MANAGEMENT_CONFIG
 
 
@@ -58,3 +59,4 @@ async def update_management_config(session: AsyncSession, new_values: dict[str, 
 
     MANAGEMENT_CONFIG.clear()
     MANAGEMENT_CONFIG.update(management_config)
+    settings_cache.update(MANAGEMENT_SETTING_KEY, management_config)
