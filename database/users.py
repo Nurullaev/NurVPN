@@ -6,7 +6,6 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database.keys import delete_key
 from database.models import (
     BlockedUser,
     CouponUsage,
@@ -214,6 +213,9 @@ async def upsert_user(
 
 async def delete_user_data(session: AsyncSession, tg_id: int):
     try:
+        # Local import breaks circular dependency with database.keys <-> database.users
+        from database.keys import delete_key
+
         await session.execute(delete(Notification).where(Notification.tg_id == tg_id))
         await session.execute(
             delete(GiftUsage).where(GiftUsage.gift_id.in_(select(Gift.gift_id).where(Gift.sender_tg_id == tg_id)))
