@@ -156,6 +156,7 @@ async def process_start_logic(
     await state.update_data(original_text=text, user_data=user_data)
 
     gift_detected = False
+    utm_handled = False
     if text:
         for part in text.split("-"):
             await run_hooks("start_link", message=message, state=state, session=session, user_data=user_data, part=part)
@@ -168,8 +169,9 @@ async def process_start_logic(
             if "referral" in part:
                 await handle_referral_link_safe(part, message, state, session, user_data)
                 continue
-            if "utm" in part:
+            if "utm" in part and not utm_handled:
                 await handle_utm_link(part, message, state, session, user_data)
+                utm_handled = True
 
     await state.clear()
     if gift_detected:
@@ -263,11 +265,14 @@ async def prompt_subscription(callback: CallbackQuery):
 
 
 async def handle_utm_link(utm_code: str, message: Message, state: FSMContext, session: AsyncSession, user_data: dict):
-    is_known = await cache_get(cache_key("utm_exists", utm_code))
+    key = cache_key("utm_exists", utm_code)
+    is_known = await cache_get(key)
     if is_known is None:
-        res = await session.execute(select(TrackingSource).where(TrackingSource.code == utm_code))
+        res = await session.execute(
+            select(1).select_from(TrackingSource).where(TrackingSource.code == utm_code).limit(1)
+        )
         is_known = res.scalar_one_or_none() is not None
-        await cache_set(cache_key("utm_exists", utm_code), bool(is_known), START_UTM_EXISTS_TTL_SEC)
+        await cache_set(key, bool(is_known), START_UTM_EXISTS_TTL_SEC)
 
     if not is_known:
         await message.answer("❌ UTM ссылка не найдена.")
