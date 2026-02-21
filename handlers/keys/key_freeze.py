@@ -22,6 +22,7 @@ from handlers.texts import (
     UNFREEZE_SUBSCRIPTION_CONFIRM_MSG,
 )
 from handlers.utils import edit_or_send_message, handle_error
+from middlewares.session import release_session_early
 from logger import logger
 
 
@@ -102,7 +103,7 @@ async def process_callback_unfreeze_subscription_confirm(callback_query: Callbac
 
         await mark_key_as_unfrozen(session, record["tg_id"], client_id, new_expiry_time)
         await session.commit()
-        await session.release_early()
+        await release_session_early(session)
 
         max(leftover / (1000 * 86400), 0.01)
         logger.info(

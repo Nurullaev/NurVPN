@@ -9,6 +9,7 @@ from handlers.keys.key_view import process_callback_view_key
 from handlers.keys.operations import delete_key_from_cluster, update_subscription
 from handlers.texts import DELETE_KEY_CONFIRM_MSG, KEY_DELETED_MSG_SIMPLE
 from handlers.utils import edit_or_send_message, handle_error
+from middlewares.session import release_session_early
 from logger import logger
 
 
@@ -69,7 +70,7 @@ async def process_callback_confirm_delete(callback_query: CallbackQuery, session
             keyboard = types.InlineKeyboardMarkup(inline_keyboard=[[back_button]])
 
             await delete_key(session, client_id)
-            await session.release_early()
+            await release_session_early(session)
 
             await edit_or_send_message(
                 target_message=callback_query.message,

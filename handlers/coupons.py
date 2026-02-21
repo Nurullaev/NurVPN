@@ -27,6 +27,7 @@ from database import (
     update_key_expiry,
 )
 from handlers.buttons import MAIN_MENU
+from middlewares.session import release_session_early
 from handlers.keys.operations import renew_key_in_cluster
 from handlers.payments.currency_rates import format_for_user
 from handlers.profile import process_callback_view_profile
@@ -249,7 +250,7 @@ async def handle_key_extension(
         if tariff:
             key_subgroup = tariff.get("subgroup_title")
 
-        await session.release_early()
+        await release_session_early(session)
         await renew_key_in_cluster(
             cluster_id=key.server_id,
             email=key.email,

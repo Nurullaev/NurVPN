@@ -13,6 +13,7 @@ from core.settings.tariffs_config import normalize_tariff_config
 from database import get_tariff_by_id
 from database.models import Key, Tariff
 from filters.admin import IsAdminFilter
+from middlewares.session import release_session_early
 from handlers.keys.operations import renew_key_in_cluster
 from logger import logger
 
@@ -333,7 +334,7 @@ async def handle_user_renew_confirm(
         )
     )
     await session.commit()
-    await session.release_early()
+    await release_session_early(session)
 
     try:
         ok = await renew_key_in_cluster(
@@ -665,7 +666,7 @@ async def handle_cfg_renew_apply(callback_query: CallbackQuery, session: AsyncSe
         )
     )
     await session.commit()
-    await session.release_early()
+    await release_session_early(session)
 
     try:
         ok = await renew_key_in_cluster(

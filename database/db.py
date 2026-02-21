@@ -11,12 +11,15 @@ from core.cache_config import UPDATE_STALE_AGE_SEC
 CONCURRENT_UPDATES_LIMIT = DB_POOL_SIZE + DB_MAX_OVERFLOW
 MAX_UPDATE_AGE_SEC = UPDATE_STALE_AGE_SEC
 
+_db_url = DATABASE_URL
 _connect_args = {}
 if USE_PGBOUNCER and "+asyncpg" in DATABASE_URL:
-    _connect_args["statement_cache_size"] = 0
+    _connect_args["prepared_statement_cache_size"] = 0
+    sep = "&" if "?" in _db_url else "?"
+    _db_url = f"{_db_url}{sep}prepared_statement_cache_size=0"
 
 engine = create_async_engine(
-    DATABASE_URL,
+    _db_url,
     echo=False,
     future=True,
     pool_size=DB_POOL_SIZE,

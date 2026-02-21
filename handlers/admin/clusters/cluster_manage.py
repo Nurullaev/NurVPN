@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_servers, update_key_expiry
 from database.models import Key, Server, Tariff
 from filters.admin import IsAdminFilter
+from middlewares.session import release_session_early
 from handlers.keys.operations import renew_key_in_cluster
 from logger import logger
 
@@ -198,7 +199,7 @@ async def handle_days_input(message: Message, state: FSMContext, session: AsyncS
                 f"✅ Время подписки продлено на <b>{days} дней</b> для <b>{affected}</b> пользователей в кластере <b>{cluster_name}</b>."
             )
         else:
-            await session.release_early()
+            await release_session_early(session)
             for key in keys:
                 new_expiry = key.expiry_time + add_ms
 

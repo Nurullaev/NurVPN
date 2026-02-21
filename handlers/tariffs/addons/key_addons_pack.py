@@ -19,6 +19,7 @@ from database import (
 )
 from database.models import User
 from handlers.buttons import BACK, CONFIRM_ADDON_BUTTON_TEXT, PAYMENT
+from middlewares.session import release_session_early
 from handlers.keys.key_view import render_key_info
 from handlers.payments.currency_rates import format_for_user
 from handlers.payments.fast_payment_flow import try_fast_payment_flow
@@ -827,7 +828,7 @@ async def handle_addons_confirm(callback: CallbackQuery, state: FSMContext, sess
                 f"old_subgroup={old_subgroup}"
             )
 
-            await session.release_early()
+            await release_session_early(session)
             await renew_key_in_cluster(
                 cluster_id=server_id,
                 email=email,

@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+import time
 
 from datetime import timedelta
 from pathlib import Path
@@ -8,6 +9,17 @@ from pathlib import Path
 from loguru import logger
 
 import config as cfg
+
+try:
+    from core.cache_config import (
+        ERROR_THROTTLE_MAX_KEYS,
+        ERROR_THROTTLE_MESSAGE_MAX_LEN,
+        ERROR_THROTTLE_WINDOW_SEC,
+    )
+except ImportError:
+    ERROR_THROTTLE_WINDOW_SEC = 60
+    ERROR_THROTTLE_MAX_KEYS = 500
+    ERROR_THROTTLE_MESSAGE_MAX_LEN = 120
 
 
 LEVELS = {
@@ -82,8 +94,49 @@ for name in (
 _EXCLUDE = {"async_api_base", "async_api", "async_api_client"}
 
 
+_error_throttle = {}
+
+
+def _error_throttle_key(record):
+    msg = record.get("message", "")
+    if isinstance(msg, str):
+        first_line = msg.split("\n")[0].strip()[:ERROR_THROTTLE_MESSAGE_MAX_LEN]
+    else:
+        first_line = str(msg)[:ERROR_THROTTLE_MESSAGE_MAX_LEN]
+    return (record.get("module", ""), record.get("function", ""), first_line)
+
+
+def _error_throttle_prune():
+    if len(_error_throttle) <= ERROR_THROTTLE_MAX_KEYS:
+        return
+    now = time.monotonic()
+    by_ts = [(v[0], k) for k, v in _error_throttle.items()]
+    by_ts.sort()
+    for _, k in by_ts[: len(_error_throttle) - ERROR_THROTTLE_MAX_KEYS]:
+        _error_throttle.pop(k, None)
+
+
 def _filter(record):
-    return record.get("name") not in _EXCLUDE and record.get("module") not in _EXCLUDE
+    if record.get("name") in _EXCLUDE or record.get("module") in _EXCLUDE:
+        return False
+    level_no = getattr(record.get("level"), "no", 20)
+    if level_no < 40:
+        return True
+    key = _error_throttle_key(record)
+    now = time.monotonic()
+    if key in _error_throttle:
+        first_ts, count = _error_throttle[key]
+        if now - first_ts < ERROR_THROTTLE_WINDOW_SEC:
+            _error_throttle[key] = (first_ts, count + 1)
+            return False
+        if count > 0:
+            suffix = f" (повторялась {count} раз за последние {int(ERROR_THROTTLE_WINDOW_SEC)} сек)"
+            record["message"] = record["message"] + suffix
+        _error_throttle[key] = (now, 0)
+    else:
+        _error_throttle_prune()
+        _error_throttle[key] = (now, 0)
+    return True
 
 
 logger.add(
