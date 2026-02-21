@@ -6,20 +6,25 @@ from typing import Any
 from aiogram import BaseMiddleware, Bot
 from aiogram.types import CallbackQuery, Message, TelegramObject
 
-from core.cache_config import CONCURRENCY_REJECT_NOTICE_TTL_SEC
+from core.cache_config import (
+    CONCURRENCY_LIMIT,
+    CONCURRENCY_MAX_WAIT_SEC,
+    CONCURRENCY_REJECT_NOTICE_TTL_SEC,
+)
 from core.redis_cache import cache_key, cache_setnx
-from database.db import CONCURRENT_UPDATES_LIMIT, MAX_UPDATE_AGE_SEC
 
 
 class ConcurrencyLimiterMiddleware(BaseMiddleware):
     """
     Регистрируется до SessionMiddleware. Ограничивает число апдейтов, одновременно
-    получающих сессию, и отсекает апдейты, ждавшие слишком долго.
+    получающих сессию (CONCURRENCY_LIMIT), чтобы не упираться в лимит.
+    Остальные ждут в очереди до CONCURRENCY_MAX_WAIT_SEC; по истечении — вежливый отказ.
     """
 
     def __init__(self) -> None:
-        self._semaphore = asyncio.Semaphore(CONCURRENT_UPDATES_LIMIT)
+        self._semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
         self._notice_ttl = CONCURRENCY_REJECT_NOTICE_TTL_SEC
+        self._max_wait_sec = CONCURRENCY_MAX_WAIT_SEC
 
     async def __call__(
         self,
@@ -27,11 +32,24 @@ class ConcurrencyLimiterMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
+        if isinstance(event, CallbackQuery):
+            bot: Bot | None = data.get("bot")
+            if bot:
+                try:
+                    await bot.answer_callback_query(
+                        event.id,
+                        text="Подождите…",
+                        show_alert=False,
+                    )
+                    data["callback_answered_by_concurrency"] = True
+                except Exception:
+                    pass
+
         data["request_time"] = time.monotonic()
         await self._semaphore.acquire()
         try:
             age = time.monotonic() - data["request_time"]
-            if age > MAX_UPDATE_AGE_SEC:
+            if age > self._max_wait_sec:
                 await self._reject_stale(event, data)
                 return None
             return await handler(event, data)
@@ -47,12 +65,11 @@ class ConcurrencyLimiterMiddleware(BaseMiddleware):
                 and uid is not None
                 and await cache_setnx(cache_key("concurrency_notice", uid), 1, self._notice_ttl)
             )
-            if should_notify:
+            if should_notify and event.message and getattr(event.message, "chat", None):
                 try:
-                    await bot.answer_callback_query(
-                        event.id,
-                        text="Время ожидания истекло. Нажмите ещё раз.",
-                        show_alert=False,
+                    await bot.send_message(
+                        event.message.chat.id,
+                        "Очередь переполнена. Подождите 1–2 минуты и нажмите снова.",
                     )
                 except Exception:
                     pass
@@ -68,7 +85,7 @@ class ConcurrencyLimiterMiddleware(BaseMiddleware):
                 try:
                     await bot.send_message(
                         event.chat.id,
-                        "Сейчас высокая нагрузка. Отправьте команду ещё раз через пару секунд.",
+                        "Сейчас много запросов. Вы в очереди — подождите 1–2 минуты и попробуйте снова.",
                     )
                 except Exception:
                     pass

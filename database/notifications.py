@@ -11,6 +11,8 @@ from database.models import Key, Notification, User
 from logger import logger
 
 
+_NOTIFICATION_TIME_BATCH_SIZE = 300
+
 async def add_notification(session: AsyncSession, tg_id: int, notification_type: str):
     try:
         stmt = (
@@ -62,30 +64,38 @@ async def check_notification_time_bulk(
     hours: int,
 ) -> set[tuple[int, str]]:
     """
-    За один запрос определяет, кому из (tg_id, notification_type) можно слать уведомление
+    Определяет, кому из (tg_id, notification_type) можно слать уведомление
     (прошло больше hours с последней отправки или не слали никогда).
+    Обрабатывает items батчами, чтобы не превышать лимит параметров в одном запросе.
     Возвращает множество пар (tg_id, notification_type), которым можно слать.
     """
     if not items:
         return set()
     now = datetime.utcnow()
     threshold = now - timedelta(hours=hours)
-    stmt = select(
-        Notification.tg_id,
-        Notification.notification_type,
-        Notification.last_notification_time,
-    ).where(tuple_(Notification.tg_id, Notification.notification_type).in_(items))
-    result = await session.execute(stmt)
-    rows = result.all()
     can_notify = set()
     found = set()
-    for row in rows:
-        found.add((row.tg_id, row.notification_type))
-        if row.last_notification_time is None or row.last_notification_time < threshold:
-            can_notify.add((row.tg_id, row.notification_type))
-    for pair in items:
-        if pair not in found:
-            can_notify.add(pair)
+    try:
+        for batch in (
+            items[i : i + _NOTIFICATION_TIME_BATCH_SIZE]
+            for i in range(0, len(items), _NOTIFICATION_TIME_BATCH_SIZE)
+        ):
+            stmt = select(
+                Notification.tg_id,
+                Notification.notification_type,
+                Notification.last_notification_time,
+            ).where(tuple_(Notification.tg_id, Notification.notification_type).in_(batch))
+            result = await session.execute(stmt)
+            for row in result:
+                found.add((row.tg_id, row.notification_type))
+                if row.last_notification_time is None or row.last_notification_time < threshold:
+                    can_notify.add((row.tg_id, row.notification_type))
+        for pair in items:
+            if pair not in found:
+                can_notify.add(pair)
+    except SQLAlchemyError:
+        await session.rollback()
+        raise
     return can_notify
 
 

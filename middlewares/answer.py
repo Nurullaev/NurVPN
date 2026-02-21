@@ -14,7 +14,7 @@ class CallbackAnswerMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
-        if isinstance(event, CallbackQuery):
+        if isinstance(event, CallbackQuery) and not data.get("callback_answered_by_concurrency"):
             try:
                 await event.answer()
             except Exception:

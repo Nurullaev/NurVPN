@@ -18,6 +18,7 @@ if USE_PGBOUNCER and "+asyncpg" in DATABASE_URL:
     sep = "&" if "?" in _db_url else "?"
     _db_url = f"{_db_url}{sep}prepared_statement_cache_size=0"
 
+_pool_recycle = 60 if USE_PGBOUNCER else 300
 engine = create_async_engine(
     _db_url,
     echo=False,
@@ -26,7 +27,7 @@ engine = create_async_engine(
     max_overflow=DB_MAX_OVERFLOW,
     pool_timeout=60,
     pool_pre_ping=True,
-    pool_recycle=300,
+    pool_recycle=_pool_recycle,
     connect_args=_connect_args,
 )
 

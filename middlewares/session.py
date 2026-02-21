@@ -4,9 +4,23 @@ import time
 from typing import Any
 
 from aiogram import BaseMiddleware
+from aiogram.exceptions import TelegramForbiddenError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from logger import logger
+
+
+def _is_bot_blocked_error(exc: BaseException) -> bool:
+    """Проверяет, что исключение связано с блокировкой бота пользователем (в т.ч. обёрнутое)."""
+    if isinstance(exc, TelegramForbiddenError):
+        return True
+    msg = str(exc).lower()
+    if "blocked by the user" in msg or "bot was blocked" in msg:
+        return True
+    for link in (getattr(exc, "__cause__", None), getattr(exc, "__context__", None)):
+        if link is not None and _is_bot_blocked_error(link):
+            return True
+    return False
 
 try:
     from config import LOG_SESSION_DURATION
@@ -127,14 +141,21 @@ class SessionMiddleware(BaseMiddleware):
                     rolled_back = True
                     return result
             except Exception as e:
-                logger.warning(
-                    "Session rollback: ошибка при обработке — handler=%s, event=%s, error=%s: %s",
-                    handler_name,
-                    event_type,
-                    type(e).__name__,
-                    e,
-                    exc_info=True,
-                )
+                if _is_bot_blocked_error(e):
+                    logger.debug(
+                        "Session rollback: пользователь заблокировал бота — handler={}, event={}",
+                        handler_name,
+                        event_type,
+                    )
+                else:
+                    logger.warning(
+                        "Session rollback: ошибка при обработке — handler={}, event={}, error={}: {}",
+                        handler_name,
+                        event_type,
+                        type(e).__name__,
+                        e,
+                        exc_info=True,
+                    )
                 await self._rollback(session, "handler failure")
                 rolled_back = True
                 raise
