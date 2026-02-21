@@ -20,15 +20,19 @@ from config import (
     HAPP_CRYPTOLINK,
     HWID_RESET_BUTTON,
     QRCODE,
-    REMNAWAVE_LOGIN,
-    REMNAWAVE_PASSWORD,
     REMNAWAVE_WEBAPP,
     REMNAWAVE_WEBAPP_OPEN_IN_BROWSER,
     TOGGLE_CLIENT,
     USE_COUNTRY_SELECTION,
 )
 from core.bootstrap import BUTTONS_CONFIG, MODES_CONFIG
-from database import get_key_details, get_keys, get_servers
+from panels.remnawave_runtime import (
+    get_remnawave_profile,
+    invalidate_remnawave_profile,
+    resolve_remnawave_api_url,
+    with_remnawave_api,
+)
+from database import get_key_details, get_keys
 from database.models import Key
 from handlers.buttons import (
     ADDONS_BUTTON_DEVICES,
@@ -73,9 +77,6 @@ from hooks.processors import (
     process_view_key_menu,
 )
 from logger import logger
-from panels.remnawave import RemnawaveAPI
-
-
 router = Router()
 moscow_tz = pytz.timezone("Europe/Moscow")
 
@@ -360,37 +361,17 @@ async def build_key_view_payload(session: AsyncSession, key_name: str):
     hwid_count = 0
     remna_used_gb = None
     if is_full_remnawave and client_id:
-        try:
-            servers = await get_servers(session)
-            remna_server = None
-            for cluster_name, cluster_servers in servers.items():
-                for srv in cluster_servers:
-                    if (srv.get("server_name") == server_name or cluster_name == server_name) and srv.get(
-                        "panel_type"
-                    ) == "remnawave":
-                        remna_server = srv
-                        break
-                if remna_server:
-                    break
-
-            if remna_server:
-                api = RemnawaveAPI(remna_server["api_url"])
-                if await api.login(REMNAWAVE_LOGIN, REMNAWAVE_PASSWORD):
-                    devices = await api.get_user_hwid_devices(client_id)
-                    hwid_count = len(devices or [])
-                    user_data = await api.get_user_by_uuid(client_id)
-                    if user_data:
-                        user_traffic = user_data.get("userTraffic", {})
-                        used_bytes = user_traffic.get("usedTrafficBytes", 0)
-                        remna_used_gb = round(used_bytes / GB, 1)
-                        traffic_limit_bytes_actual = user_data.get("trafficLimitBytes")
-                        if traffic_limit_bytes_actual is not None:
-                            if traffic_limit_bytes_actual > 0:
-                                traffic_limit_gb = int(traffic_limit_bytes_actual / GB)
-                            else:
-                                traffic_limit_gb = 0
-        except Exception as error:
-            logger.error(f"Ошибка при получении данных Remnawave для {client_id}: {error}")
+        profile = await get_remnawave_profile(session, str(server_name), client_id)
+        if profile:
+            hwid_count = int(profile.get("hwid_count") or 0)
+            remna_used_gb = profile.get("used_gb")
+            traffic_limit_bytes_actual = profile.get("traffic_limit_bytes")
+            if traffic_limit_bytes_actual is not None:
+                try:
+                    traffic_limit_bytes_actual = int(traffic_limit_bytes_actual)
+                    traffic_limit_gb = int(traffic_limit_bytes_actual / GB) if traffic_limit_bytes_actual > 0 else 0
+                except (TypeError, ValueError):
+                    pass
 
     country_selection_enabled = bool(MODES_CONFIG.get("COUNTRY_SELECTION_ENABLED", USE_COUNTRY_SELECTION))
     remnawave_webapp_enabled = bool(MODES_CONFIG.get("REMNAWAVE_WEBAPP_ENABLED", REMNAWAVE_WEBAPP))
@@ -507,25 +488,42 @@ async def handle_reset_hwid(callback_query: CallbackQuery, session: AsyncSession
         await callback_query.answer("❌ У ключа отсутствует client_id.", show_alert=True)
         return
 
-    servers = await get_servers(session=session)
-    remna_server = next((srv for cl in servers.values() for srv in cl if srv.get("panel_type") == "remnawave"), None)
-    if not remna_server:
+    remna_api_url = await resolve_remnawave_api_url(session, str(record.get("server_id") or ""), fallback_any=True)
+    if not remna_api_url:
         await callback_query.answer("❌ Remnawave-сервер не найден.", show_alert=True)
         return
 
-    api = RemnawaveAPI(remna_server["api_url"])
-    if not await api.login(REMNAWAVE_LOGIN, REMNAWAVE_PASSWORD):
+    async def _reset_devices(api):
+        devices = await api.get_user_hwid_devices(client_id)
+        if not devices:
+            return 0, 0
+        deleted_local = 0
+        for device in devices:
+            if await api.delete_user_hwid_device(client_id, device["hwid"]):
+                deleted_local += 1
+        return len(devices), deleted_local
+
+    reset_result = await with_remnawave_api(
+        session,
+        str(record.get("server_id") or ""),
+        _reset_devices,
+        fallback_any=True,
+        timeout_sec=12.0,
+    )
+    if reset_result is None:
         await callback_query.answer("❌ Авторизация в Remnawave не удалась.", show_alert=True)
         return
 
-    devices = await api.get_user_hwid_devices(client_id)
-    if not devices:
+    total, deleted = reset_result
+    await invalidate_remnawave_profile(
+        session,
+        str(record.get("server_id") or ""),
+        str(client_id),
+        fallback_any=True,
+    )
+    if total == 0:
         await callback_query.answer("✅ Устройства не были привязаны.", show_alert=True)
     else:
-        deleted = 0
-        for device in devices:
-            if await api.delete_user_hwid_device(client_id, device["hwid"]):
-                deleted += 1
         await callback_query.answer(f"✅ Устройства сброшены ({deleted})", show_alert=True)
 
     if await process_after_hwid_reset(

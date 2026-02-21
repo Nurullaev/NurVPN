@@ -2,15 +2,15 @@ import asyncio
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from config import HAPP_CRYPTOLINK, LEGACY_LINKS, PUBLIC_LINK, REMNAWAVE_LOGIN, REMNAWAVE_PASSWORD, SUPERNODE
+from config import HAPP_CRYPTOLINK, LEGACY_LINKS, PUBLIC_LINK, SUPERNODE
 from core.bootstrap import MODES_CONFIG
+from panels.remnawave_runtime import with_remnawave_api
 from database import filter_cluster_by_subgroup, get_key_details, get_tariff_by_id
 from logger import logger
 from panels._3xui import get_vless_link_for_client, get_xui_instance
-from panels.remnawave import RemnawaveAPI
 from servers import extract_host
 
-from .utils import is_plan_vless, score_vless_url, split_by_panel
+from .utils import is_plan_vless, split_by_panel
 
 
 async def _is_vless_tariff(session: AsyncSession, email: str) -> bool:
@@ -23,40 +23,46 @@ async def _is_vless_tariff(session: AsyncSession, email: str) -> bool:
     return is_plan_vless(tariff)
 
 
-async def _try_build_remna_vless(servers: list, email: str) -> tuple[str | None, str | None, str | None]:
+async def _try_build_remna_vless(
+    session: AsyncSession,
+    servers: list,
+    email: str,
+) -> tuple[str | None, str | None, str | None]:
     happ_cryptolink_enabled = bool(MODES_CONFIG.get("HAPP_CRYPTOLINK_ENABLED", HAPP_CRYPTOLINK))
 
     si = servers[0]
-    remna = RemnawaveAPI(si["api_url"])
-    ok = await remna.login(REMNAWAVE_LOGIN, REMNAWAVE_PASSWORD)
-    if not ok:
+    server_ref = si.get("server_name") or si.get("cluster_name") or si.get("api_url") or ""
+
+    async def _build(api):
+        data = await api.get_subscription_by_username(email)
+        if not data:
+            return None
+
+        sub_url = data.get("subscriptionUrl") or None
+        links = data.get("links") or []
+
+        best_vless = None
+        for link in links:
+            if isinstance(link, str) and link.lower().startswith("vless://"):
+                best_vless = link
+                logger.debug(f"[Remnawave] Found VLESS in links: {link[:60]}...")
+                break
+
+        happ_link = None
+        if happ_cryptolink_enabled and sub_url:
+            try:
+                happ_link = await api.encrypt_happ_crypto_link(sub_url)
+            except Exception as e:
+                logger.warning(f"[Remnawave] happ encrypt failed: {e}")
+                happ_link = None
+
+        return best_vless, sub_url, happ_link
+
+    result = await with_remnawave_api(session, str(server_ref), _build, fallback_any=True, timeout_sec=8.0)
+    if result is None:
         logger.warning("[Remnawave] login failed")
         return None, None, None
-
-    data = await remna.get_subscription_by_username(email)
-    if not data:
-        logger.warning("[Remnawave] by-username empty")
-        return None, None, None
-
-    sub_url = data.get("subscriptionUrl") or None
-    links = data.get("links") or []
-
-    best_vless = None
-    for link in links:
-        if isinstance(link, str) and link.lower().startswith("vless://"):
-            best_vless = link
-            logger.debug(f"[Remnawave] Found VLESS in links: {link[:60]}...")
-            break
-
-    happ_link = None
-    if happ_cryptolink_enabled and sub_url:
-        try:
-            happ_link = await remna.encrypt_happ_crypto_link(sub_url)
-        except Exception as e:
-            logger.warning(f"[Remnawave] happ encrypt failed: {e}")
-            happ_link = None
-
-    return best_vless, sub_url, happ_link
+    return result
 
 
 async def _try_build_3xui_vless(servers: list, email: str) -> str | None:
@@ -143,7 +149,7 @@ async def make_aggregated_link(
                 logger.info("[agg_link] choose 3x-ui VLESS")
                 return xui_link
         if remna:
-            best_vless, sub_url, happ_link = await _try_build_remna_vless(remna, email)
+            best_vless, sub_url, happ_link = await _try_build_remna_vless(session, remna, email)
             if best_vless:
                 logger.info("[agg_link] choose Remnawave VLESS")
                 return best_vless
@@ -168,7 +174,7 @@ async def make_aggregated_link(
         if legacy_links_enabled:
             logger.info("[agg_link] LEGACY non-vless -> base link")
             return f"{base}/{email}/{tg_id}"
-        best_vless, sub_url, happ_link = await _try_build_remna_vless(remna, email)
+        best_vless, sub_url, happ_link = await _try_build_remna_vless(session, remna, email)
         if remna_link_override and (
             remna_link_override.lower().startswith("vless://") or remna_link_override.startswith(("http", "happ://"))
         ):

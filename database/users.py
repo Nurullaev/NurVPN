@@ -1,11 +1,15 @@
 from datetime import datetime
 
-from cachetools import TTLCache
 from sqlalchemy import delete, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.cache_config import (
+    USER_EXISTS_CACHE_TTL_SEC,
+    USER_SNAPSHOT_CACHE_TTL_SEC,
+)
+from core.redis_cache import cache_delete, cache_get, cache_key, cache_set
 from database.models import (
     BlockedUser,
     CouponUsage,
@@ -20,12 +24,15 @@ from database.models import (
 )
 from logger import logger
 
-_SNAPSHOT_CACHE: TTLCache[int, tuple[int, int]] = TTLCache(maxsize=150_000, ttl=30)
-_EXISTS_CACHE: TTLCache[int, bool] = TTLCache(maxsize=150_000, ttl=60)
-
 
 def invalidate_user_snapshot(tg_id: int) -> None:
-    _SNAPSHOT_CACHE.pop(tg_id, None)
+    import asyncio
+
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(cache_delete(cache_key("user_snapshot", tg_id)))
+    except RuntimeError:
+        return
 
 
 async def add_user(
@@ -60,7 +67,7 @@ async def add_user(
             return False
         if commit:
             await session.commit()
-        _EXISTS_CACHE[tg_id] = True
+        await cache_set(cache_key("user_exists", tg_id), True, USER_EXISTS_CACHE_TTL_SEC)
         logger.info(f"[DB] Новый пользователь добавлен: {tg_id} (source: {source_code})")
         return True
     except SQLAlchemyError as e:
@@ -90,14 +97,13 @@ async def update_balance(session: AsyncSession, tg_id: int, amount: float) -> No
 
 
 async def check_user_exists(session: AsyncSession, tg_id: int) -> bool:
-    try:
-        return _EXISTS_CACHE[tg_id]
-    except KeyError:
-        pass
+    cached = await cache_get(cache_key("user_exists", tg_id))
+    if isinstance(cached, bool):
+        return cached
     stmt = select(exists().where(User.tg_id == tg_id))
     result = await session.execute(stmt)
     value = result.scalar()
-    _EXISTS_CACHE[tg_id] = value
+    await cache_set(cache_key("user_exists", tg_id), bool(value), USER_EXISTS_CACHE_TTL_SEC)
     return value
 
 
@@ -173,7 +179,7 @@ async def upsert_user(
             if row is None:
                 return None
             await session.commit()
-            _EXISTS_CACHE[tg_id] = True
+            await cache_set(cache_key("user_exists", tg_id), True, USER_EXISTS_CACHE_TTL_SEC)
             return dict(row)
 
         res = await session.execute(
@@ -203,7 +209,7 @@ async def upsert_user(
         )
         row = res.mappings().one()
         await session.commit()
-        _EXISTS_CACHE[tg_id] = True
+        await cache_set(cache_key("user_exists", tg_id), True, USER_EXISTS_CACHE_TTL_SEC)
         return dict(row)
     except SQLAlchemyError as e:
         logger.error(f"[DB] Ошибка при UPSERT пользователя {tg_id}: {e}")
@@ -213,7 +219,6 @@ async def upsert_user(
 
 async def delete_user_data(session: AsyncSession, tg_id: int):
     try:
-        # Local import breaks circular dependency with database.keys <-> database.users
         from database.keys import delete_key
 
         await session.execute(delete(Notification).where(Notification.tg_id == tg_id))
@@ -246,17 +251,18 @@ async def mark_trial_extended(tg_id: int, session: AsyncSession):
 
 
 async def get_user_snapshot(session: AsyncSession, tg_id: int) -> tuple[int, int] | None:
-    try:
-        return _SNAPSHOT_CACHE[tg_id]
-    except KeyError:
-        pass
+    cached = await cache_get(cache_key("user_snapshot", tg_id))
+    if isinstance(cached, list) and len(cached) == 2:
+        return (int(cached[0]), int(cached[1]))
+    if isinstance(cached, tuple) and len(cached) == 2:
+        return (int(cached[0]), int(cached[1]))
     keys_count_sq = select(func.count(Key.client_id)).where(Key.tg_id == tg_id).scalar_subquery()
     res = await session.execute(select(func.coalesce(User.trial, 0), keys_count_sq).where(User.tg_id == tg_id))
     row = res.first()
     if row is None:
         return None
     value = (int(row[0]), int(row[1]))
-    _SNAPSHOT_CACHE[tg_id] = value
+    await cache_set(cache_key("user_snapshot", tg_id), [value[0], value[1]], USER_SNAPSHOT_CACHE_TTL_SEC)
     return value
 
 

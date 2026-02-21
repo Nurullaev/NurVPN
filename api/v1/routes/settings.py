@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.depends import get_session, verify_admin_token
 from api.v1.schemas.settings import SettingResponse, SettingUpsert
-from database import settings_cache
+from database.settings_cache import settings_cache
 from core.settings.buttons_config import BUTTONS_CONFIG, update_buttons_config
 from core.settings.modes_config import MODES_CONFIG, update_modes_config
 from core.settings.money_config import MONEY_CONFIG, update_money_config

@@ -10,7 +10,6 @@ import aiofiles
 from aiogram import Bot
 from aiogram.types import BufferedInputFile
 
-from bot import bot
 from config import (
     ADMIN_ID,
     BACKUP_CAPTION,
@@ -36,17 +35,23 @@ from logger import logger
 async def backup_database() -> Exception | None:
     """
     Создает резервную копию базы данных (или полный архив) и отправляет его администраторам.
+    Блокирующие операции (pg_dump и т.д.) выполняются в пуле процессов, не блокируя event loop и используя другие ядра CPU.
 
     Returns:
         Optional[Exception]: Исключение в случае ошибки или None при успешном выполнении
     """
+    import asyncio
+    from core.executor import get_process_pool
+
+    loop = asyncio.get_event_loop()
+    pool = get_process_pool()
     if BACKUP_CREATE_ARCHIVE:
         if not any([BACKUP_INCLUDE_DB, BACKUP_INCLUDE_CONFIG, BACKUP_INCLUDE_TEXTS, BACKUP_INCLUDE_IMG]):
-            backup_file_path, exception = _create_database_backup()
+            backup_file_path, exception = await loop.run_in_executor(pool, _create_database_backup)
         else:
-            backup_file_path, exception = _create_backup_archive()
+            backup_file_path, exception = await loop.run_in_executor(pool, _create_backup_archive)
     else:
-        backup_file_path, exception = _create_database_backup()
+        backup_file_path, exception = await loop.run_in_executor(pool, _create_database_backup)
 
     if exception:
         logger.error(f"Ошибка при создании бэкапа: {exception}")
@@ -74,11 +79,12 @@ def _create_database_backup() -> tuple[str | None, Exception | None]:
         Tuple[Optional[str], Optional[Exception]]: Путь к файлу бэкапа и исключение (если произошла ошибка)
     """
     date_formatted = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+    pid_suffix = os.getpid()
 
     backup_dir = Path(BACK_DIR)
     backup_dir.mkdir(parents=True, exist_ok=True)
 
-    filename = backup_dir / f"{DB_NAME}-backup-{date_formatted}.sql"
+    filename = backup_dir / f"{DB_NAME}-backup-{date_formatted}-{pid_suffix}.sql"
 
     try:
         os.environ["PGPASSWORD"] = DB_PASSWORD
@@ -123,10 +129,11 @@ def _create_backup_archive() -> tuple[str | None, Exception | None]:
         Tuple[Optional[str], Optional[Exception]]: Путь к файлу архива и исключение (если произошла ошибка)
     """
     date_formatted = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+    pid_suffix = os.getpid()
     backup_dir = Path(BACK_DIR)
     backup_dir.mkdir(parents=True, exist_ok=True)
 
-    archive_path = backup_dir / f"{DB_NAME}-full-backup-{date_formatted}.tar.gz"
+    archive_path = backup_dir / f"{DB_NAME}-full-backup-{date_formatted}-{pid_suffix}.tar.gz"
     project_root = Path(__file__).parent.parent
     archive_folder = f"backup-{date_formatted}"
 
@@ -241,6 +248,8 @@ async def _send_backup_to_admins(backup_file_path: str) -> None:
     """
     if not backup_file_path or not os.path.exists(backup_file_path):
         raise FileNotFoundError(f"Файл бэкапа не найден: {backup_file_path}")
+
+    from bot import bot
 
     async def send_default():
         for admin_id in ADMIN_ID:

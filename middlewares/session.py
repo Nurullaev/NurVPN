@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import time
 from typing import Any
 
@@ -16,6 +18,11 @@ async def release_session_early(session: Any) -> bool:
     if hasattr(session, "release_early"):
         return await session.release_early()
     return False
+
+
+def wrap_session(session: AsyncSession, maker) -> "_SessionProxy":
+    """Оборачивает сессию в прокси с release_early (для фоновых задач вроде periodic_notifications)."""
+    return _SessionProxy(session, maker, {})
 
 
 class _SessionProxy:
@@ -47,10 +54,15 @@ class _SessionProxy:
         import asyncio
 
         async with self._maker() as s:
-            result = getattr(s, method)(*args, **kwargs)
-            if asyncio.iscoroutine(result):
-                return await result
-            return result
+            try:
+                result = getattr(s, method)(*args, **kwargs)
+                if asyncio.iscoroutine(result):
+                    result = await result
+                await s.commit()
+                return result
+            except Exception:
+                await s.rollback()
+                raise
 
     def __getattr__(self, name: str):
         if name in ("_session", "_maker", "_released", "_data", "release_early", "_with_short_session"):
@@ -92,6 +104,7 @@ class SessionMiddleware(BaseMiddleware):
             proxy = _SessionProxy(session, self.sessionmaker, data)
             data["session"] = proxy
             committed = False
+            rolled_back = False
             try:
                 result = await handler(event, data)
                 if data.get("_session_released_early"):
@@ -111,6 +124,7 @@ class SessionMiddleware(BaseMiddleware):
                         exc_info=True,
                     )
                     await self._rollback(session, "commit failure")
+                    rolled_back = True
                     return result
             except Exception as e:
                 logger.warning(
@@ -122,9 +136,10 @@ class SessionMiddleware(BaseMiddleware):
                     exc_info=True,
                 )
                 await self._rollback(session, "handler failure")
+                rolled_back = True
                 raise
             finally:
-                if not committed and not data.get("_session_released_early"):
+                if not committed and not rolled_back and not data.get("_session_released_early"):
                     try:
                         await session.rollback()
                     except Exception:

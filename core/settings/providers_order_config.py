@@ -3,9 +3,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.models import Setting
 
-from database import settings_cache
+from database.settings_cache import settings_cache
+from .runtime_sync import publish_runtime_config, register_runtime_config
 
 PROVIDERS_ORDER: dict[str, int] = {}
+register_runtime_config("PROVIDERS_ORDER", PROVIDERS_ORDER)
 
 
 async def load_providers_order(session: AsyncSession) -> None:
@@ -39,3 +41,4 @@ async def update_providers_order(session: AsyncSession, new_order: dict[str, int
     PROVIDERS_ORDER.clear()
     PROVIDERS_ORDER.update(new_order)
     settings_cache.update("PROVIDERS_ORDER", new_order)
+    await publish_runtime_config("PROVIDERS_ORDER", new_order)

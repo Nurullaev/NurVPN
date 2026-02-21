@@ -86,7 +86,7 @@ class User(DictLikeMixin, Base):
 class Key(DictLikeMixin, Base):
     __tablename__ = "keys"
 
-    tg_id = Column(BigInteger, ForeignKey("users.tg_id"), nullable=False)
+    tg_id = Column(BigInteger, ForeignKey("users.tg_id"), nullable=False, index=True)
     client_id = Column(String, primary_key=True)
     email = Column(String, unique=True)
     created_at = Column(BigInteger)

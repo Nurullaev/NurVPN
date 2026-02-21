@@ -198,6 +198,7 @@ async def handle_days_input(message: Message, state: FSMContext, session: AsyncS
                 f"✅ Время подписки продлено на <b>{days} дней</b> для <b>{affected}</b> пользователей в кластере <b>{cluster_name}</b>."
             )
         else:
+            await session.release_early()
             for key in keys:
                 new_expiry = key.expiry_time + add_ms
 

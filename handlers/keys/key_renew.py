@@ -825,6 +825,7 @@ async def complete_key_renewal(
             logger.error(f"[Error] Кластер для {server_or_cluster} не найден.")
             return
 
+        await session.release_early()
         await renew_key_in_cluster(
             cluster_id=cluster_id,
             email=email,

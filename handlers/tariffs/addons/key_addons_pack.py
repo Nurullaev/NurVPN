@@ -827,6 +827,7 @@ async def handle_addons_confirm(callback: CallbackQuery, state: FSMContext, sess
                 f"old_subgroup={old_subgroup}"
             )
 
+            await session.release_early()
             await renew_key_in_cluster(
                 cluster_id=server_id,
                 email=email,

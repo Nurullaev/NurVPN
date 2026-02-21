@@ -333,6 +333,7 @@ async def handle_user_renew_confirm(
         )
     )
     await session.commit()
+    await session.release_early()
 
     try:
         ok = await renew_key_in_cluster(
@@ -664,6 +665,7 @@ async def handle_cfg_renew_apply(callback_query: CallbackQuery, session: AsyncSe
         )
     )
     await session.commit()
+    await session.release_early()
 
     try:
         ok = await renew_key_in_cluster(

@@ -2,8 +2,14 @@ from sqlalchemy import delete, func, insert, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.cache_config import SERVERS_CACHE_TTL_SEC
+from core.redis_cache import cache_delete_pattern, cache_get, cache_key, cache_set
 from database.models import Key, Server, ServerSpecialgroup, ServerSubgroup, Tariff
 from logger import logger
+
+
+async def _invalidate_servers_cache() -> None:
+    await cache_delete_pattern("servers:*")
 
 
 async def create_server(
@@ -24,6 +30,7 @@ async def create_server(
         )
         await session.execute(stmt)
         await session.commit()
+        await _invalidate_servers_cache()
         logger.info(f"✅ Сервер {server_name} добавлен в кластер {cluster_name}")
     except SQLAlchemyError as e:
         logger.error(f"❌ Ошибка при добавлении сервера {server_name}: {e}")
@@ -36,6 +43,7 @@ async def delete_server(session: AsyncSession, server_name: str):
         stmt = delete(Server).where(Server.server_name == server_name)
         await session.execute(stmt)
         await session.commit()
+        await _invalidate_servers_cache()
         logger.info(f"🗑 Сервер {server_name} удалён")
     except SQLAlchemyError as e:
         logger.error(f"❌ Ошибка при удалении сервера {server_name}: {e}")
@@ -45,6 +53,11 @@ async def delete_server(session: AsyncSession, server_name: str):
 
 async def get_servers(session: AsyncSession, include_enabled: bool = False) -> dict:
     from handlers.utils import ALLOWED_GROUP_CODES
+
+    cache_key_servers = cache_key("servers", int(include_enabled))
+    cached = await cache_get(cache_key_servers)
+    if isinstance(cached, dict):
+        return cached
 
     try:
         stmt = select(Server)
@@ -97,6 +110,7 @@ async def get_servers(session: AsyncSession, include_enabled: bool = False) -> d
                 "cluster_name": cluster,
                 "server_id": s.id,
             })
+        await cache_set(cache_key_servers, grouped, SERVERS_CACHE_TTL_SEC)
         return grouped
     except SQLAlchemyError as e:
         logger.error(f"Ошибка при получении серверов: {e}")
@@ -172,6 +186,7 @@ async def update_server_field(session: AsyncSession, server_name: str, field: st
         stmt = update(Server).where(Server.server_name == server_name).values(**{field: value})
         await session.execute(stmt)
         await session.commit()
+        await _invalidate_servers_cache()
         logger.info(f"✅ Поле {field} сервера {server_name} обновлено на {value}")
         return True
     except SQLAlchemyError as e:
@@ -197,6 +212,7 @@ async def update_server_name_with_keys(session: AsyncSession, old_name: str, new
         await session.execute(stmt_keys)
 
         await session.commit()
+        await _invalidate_servers_cache()
         logger.info(f"✅ Сервер переименован с {old_name} на {new_name}")
         return True
     except SQLAlchemyError as e:
@@ -256,6 +272,7 @@ async def update_server_cluster(session: AsyncSession, server_name: str, new_clu
             )
 
         await session.commit()
+        await _invalidate_servers_cache()
         logger.info(
             f"✅ Сервер {server_name} перемещен в кластер {new_cluster} с обновлением тарифной группы и привязок подгрупп"
         )

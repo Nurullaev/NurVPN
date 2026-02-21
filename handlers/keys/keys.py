@@ -69,6 +69,7 @@ async def process_callback_confirm_delete(callback_query: CallbackQuery, session
             keyboard = types.InlineKeyboardMarkup(inline_keyboard=[[back_button]])
 
             await delete_key(session, client_id)
+            await session.release_early()
 
             await edit_or_send_message(
                 target_message=callback_query.message,

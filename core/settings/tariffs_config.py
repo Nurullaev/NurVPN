@@ -6,7 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.models import Setting
 
-from database import settings_cache
+from database.settings_cache import settings_cache
+from .runtime_sync import publish_runtime_config, register_runtime_config
 
 
 TARIFFS_CONFIG: dict[str, Any] = {
@@ -14,6 +15,7 @@ TARIFFS_CONFIG: dict[str, Any] = {
     "KEY_ADDONS_PACK_MODE": "all",
     "KEY_ADDONS_PRICE_BASE_MODE": "current",
 }
+register_runtime_config("TARIFFS_CONFIG", TARIFFS_CONFIG)
 
 
 async def load_tariffs_config(session: AsyncSession) -> None:
@@ -65,6 +67,7 @@ async def update_tariffs_config(session: AsyncSession, new_values: dict[str, Any
     TARIFFS_CONFIG.clear()
     TARIFFS_CONFIG.update(tariffs_config)
     settings_cache.update("TARIFFS_CONFIG", tariffs_config)
+    await publish_runtime_config("TARIFFS_CONFIG", tariffs_config)
 
 
 def calc_extra_devices_price(tariff: dict[str, Any], device_limit: int) -> int:

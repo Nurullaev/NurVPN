@@ -102,6 +102,7 @@ async def process_callback_unfreeze_subscription_confirm(callback_query: Callbac
 
         await mark_key_as_unfrozen(session, record["tg_id"], client_id, new_expiry_time)
         await session.commit()
+        await session.release_early()
 
         max(leftover / (1000 * 86400), 0.01)
         logger.info(

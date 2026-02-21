@@ -18,6 +18,7 @@ from api.depends import get_session, verify_admin_token, verify_admin_token_shor
 from database import async_session_maker
 from config import API_TOKEN, BOT_SERVICE
 from core.bootstrap import MANAGEMENT_CONFIG
+from core.executor import get_thread_pool
 from core.settings.management_config import update_management_config
 from database.models import Key, User
 from database.models import Server
@@ -64,9 +65,13 @@ async def _restart_bot() -> None:
         is_systemd = parent and "systemd" in parent.name().lower()
 
         if is_systemd:
-            subprocess.run(
-                ["sudo", "systemctl", "restart", BOT_SERVICE],
-                check=True,
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                get_thread_pool(),
+                lambda: subprocess.run(
+                    ["sudo", "systemctl", "restart", BOT_SERVICE],
+                    check=True,
+                ),
             )
         else:
             python_exe = sys.executable
@@ -195,6 +200,7 @@ async def launch_broadcast(
 
     async with async_session_maker() as session:
         tg_ids, total_users = await get_recipients(session, payload.send_to, (payload.cluster_name or None))
+        await session.commit()
     if not tg_ids:
         return {"success": False, "message": "No recipients found", "stats": {"total_messages": 0}}
 

@@ -1,12 +1,18 @@
 from aiogram import BaseMiddleware, Bot
 from aiogram.types import CallbackQuery
-from cachetools import TTLCache
+
+from core.cache_config import (
+    THROTTLE_CACHE_TTL_SEC,
+    THROTTLE_NOTICE_TTL_SEC,
+)
+from core.redis_cache import cache_incr, cache_key, cache_setnx
+from hashlib import sha1
 
 
 class ThrottlingMiddleware(BaseMiddleware):
     def __init__(self) -> None:
-        self.cache = TTLCache(maxsize=50_000, ttl=1.0)
-        self.throttle_notice_cache = TTLCache(maxsize=50_000, ttl=1.0)
+        self._counter_ttl = THROTTLE_CACHE_TTL_SEC
+        self._notice_ttl = THROTTLE_NOTICE_TTL_SEC
 
     async def __call__(self, handler, event, data):
         if not isinstance(event, CallbackQuery):
@@ -17,11 +23,13 @@ class ThrottlingMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         key = (user_id, event.data or "")
-        current_count = self.cache.get(key, 0)
+        key_hash = sha1(key[1].encode("utf-8")).hexdigest()
+        counter_key = cache_key("throttle_counter", user_id, key_hash)
+        current_count = await cache_incr(counter_key, self._counter_ttl)
 
         if current_count >= 2:
-            if key not in self.throttle_notice_cache:
-                self.throttle_notice_cache[key] = None
+            notice_key = cache_key("throttle_notice", user_id, key_hash)
+            if await cache_setnx(notice_key, 1, self._notice_ttl):
                 bot: Bot = data["bot"]
                 await bot.answer_callback_query(
                     callback_query_id=event.id,
@@ -30,5 +38,4 @@ class ThrottlingMiddleware(BaseMiddleware):
                 )
             return
 
-        self.cache[key] = current_count + 1
         return await handler(event, data)

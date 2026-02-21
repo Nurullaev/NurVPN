@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.depends import get_session, verify_admin_token
 from api.v1.routes.base_crud import generate_crud_router
 from api.v1.schemas.users import UserBase, UserResponse, UserUpdate
-from database import delete_user_data, get_servers
+from database import async_session_maker, delete_user_data, get_servers
 from database.models import Key, User
 from handlers.keys.operations import delete_key_from_cluster
 from logger import logger
@@ -33,18 +33,24 @@ async def delete_user(
         result = await session.execute(select(Key.email, Key.client_id).where(Key.tg_id == tg_id))
         key_records = result.all()
 
-        async def delete_keys_from_servers():
-            try:
-                servers = await get_servers(session=session)
-                tasks = []
-                for email, client_id in key_records:
-                    for cluster_id in servers:
-                        tasks.append(delete_key_from_cluster(cluster_id, email, client_id, session))
-                await asyncio.gather(*tasks, return_exceptions=True)
-            except Exception as e:
-                logger.error(f"[DELETE] Ошибка при удалении ключей с серверов для пользователя {tg_id}: {e}")
+        async with async_session_maker() as s:
+            servers = await get_servers(session=s)
+        cluster_ids = list(servers.keys())
 
-        await delete_keys_from_servers()
+        async def _delete_one(cluster_id: str, email: str, client_id: str):
+            async with async_session_maker() as s:
+                await delete_key_from_cluster(cluster_id, email, client_id, s)
+
+        try:
+            tasks = [
+                _delete_one(cluster_id, email, client_id)
+                for email, client_id in key_records
+                for cluster_id in cluster_ids
+            ]
+            await asyncio.gather(*tasks, return_exceptions=True)
+        except Exception as e:
+            logger.error(f"[DELETE] Ошибка при удалении ключей с серверов для пользователя {tg_id}: {e}")
+
         await delete_user_data(session, tg_id)
 
         return {"detail": f"Пользователь {tg_id} и его ключи успешно удалены."}

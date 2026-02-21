@@ -2,10 +2,13 @@ from aiogram import F, Router, types
 from aiogram.types import CallbackQuery
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from config import REMNAWAVE_LOGIN, REMNAWAVE_PASSWORD
-from database import get_client_id_by_email, get_servers
+from panels.remnawave_runtime import (
+    invalidate_remnawave_profile,
+    resolve_remnawave_api_url,
+    with_remnawave_api,
+)
+from database import get_client_id_by_email
 from filters.admin import IsAdminFilter
-from panels.remnawave import RemnawaveAPI
 
 from .keyboard import AdminUserEditorCallback, build_editor_kb, build_hwid_menu_kb
 
@@ -30,30 +33,25 @@ async def handle_hwid_menu(
         await callback_query.message.edit_text("🚫 Не удалось найти client_id по email.")
         return
 
-    servers = await get_servers(session=session)
-    remna_server = None
-    for cluster_servers in servers.values():
-        for server in cluster_servers:
-            if server.get("panel_type", "") == "remnawave":
-                remna_server = server
-                break
-        if remna_server:
-            break
-
-    if not remna_server:
+    remna_api_url = await resolve_remnawave_api_url(session, "", fallback_any=True)
+    if not remna_api_url:
         await callback_query.message.edit_text(
             "🚫 Нет доступного сервера Remnawave.",
             reply_markup=build_editor_kb(tg_id),
         )
         return
 
-    api = RemnawaveAPI(remna_server["api_url"])
-    if not await api.login(REMNAWAVE_LOGIN, REMNAWAVE_PASSWORD):
+    async def _fetch_info_and_devices(api):
+        user_info = await api.get_user_by_uuid(client_id)
+        devices = await api.get_user_hwid_devices(client_id)
+        return user_info, devices
+
+    result = await with_remnawave_api(session, "", _fetch_info_and_devices, fallback_any=True, timeout_sec=8.0)
+    if result is None:
         await callback_query.message.edit_text("❌ Ошибка авторизации в Remnawave.")
         return
 
-    user_info = await api.get_user_by_uuid(client_id)
-    devices = await api.get_user_hwid_devices(client_id)
+    user_info, devices = result
 
     status_emoji = "🟢"
     status_text = "Онлайн"
@@ -131,42 +129,44 @@ async def handle_hwid_reset(
         await callback_query.message.edit_text("🚫 Не удалось найти client_id по email.")
         return
 
-    servers = await get_servers(session=session)
-    remna_server = None
-    for cluster_servers in servers.values():
-        for server in cluster_servers:
-            if server.get("panel_type", "") == "remnawave":
-                remna_server = server
-                break
-        if remna_server:
-            break
-
-    if not remna_server:
+    remna_api_url = await resolve_remnawave_api_url(session, "", fallback_any=True)
+    if not remna_api_url:
         await callback_query.message.edit_text(
             "🚫 Нет доступного сервера Remnawave.",
             reply_markup=build_editor_kb(tg_id),
         )
         return
 
-    api = RemnawaveAPI(remna_server["api_url"])
-    if not await api.login(REMNAWAVE_LOGIN, REMNAWAVE_PASSWORD):
+    async def _reset_devices(api):
+        devices = await api.get_user_hwid_devices(client_id)
+        if not devices:
+            return 0, 0
+        deleted = 0
+        for device in devices:
+            if await api.delete_user_hwid_device(client_id, device["hwid"]):
+                deleted += 1
+        return len(devices), deleted
+
+    reset_result = await with_remnawave_api(session, "", _reset_devices, fallback_any=True, timeout_sec=12.0)
+    if reset_result is None:
         await callback_query.message.edit_text("❌ Ошибка авторизации в Remnawave.")
         return
 
-    devices = await api.get_user_hwid_devices(client_id)
-    if not devices:
+    total, deleted = reset_result
+    await invalidate_remnawave_profile(
+        session,
+        "",
+        str(client_id),
+        fallback_any=True,
+    )
+    if total == 0:
         await callback_query.message.edit_text(
             "ℹ️ У пользователя нет привязанных устройств.",
             reply_markup=build_editor_kb(tg_id, True),
         )
         return
 
-    deleted = 0
-    for device in devices:
-        if await api.delete_user_hwid_device(client_id, device["hwid"]):
-            deleted += 1
-
     await callback_query.message.edit_text(
-        f"✅ Удалено HWID-устройств: <b>{deleted}</b> из <b>{len(devices)}</b>.",
+        f"✅ Удалено HWID-устройств: <b>{deleted}</b> из <b>{total}</b>.",
         reply_markup=build_editor_kb(tg_id, True),
     )

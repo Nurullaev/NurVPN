@@ -1,3 +1,6 @@
+import os
+from importlib import import_module
+
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -14,6 +17,17 @@ apply_button_icons_patch()
 
 bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 storage = MemoryStorage()
+redis_url = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
+
+try:
+    RedisStorage = import_module("aiogram.fsm.storage.redis").RedisStorage
+    redis_from_url = import_module("redis.asyncio").from_url
+
+    redis = redis_from_url(redis_url, encoding="utf-8", decode_responses=True)
+    storage = RedisStorage(redis=redis)
+except Exception:
+    storage = MemoryStorage()
+
 dp = Dispatcher(bot=bot, storage=storage)
 
 dp.include_router(modules_hub)

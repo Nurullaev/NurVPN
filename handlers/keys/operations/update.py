@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from config import PUBLIC_LINK, REMNAWAVE_LOGIN, REMNAWAVE_PASSWORD, SUPERNODE
+from config import PUBLIC_LINK, SUPERNODE
+from panels.remnawave_runtime import invalidate_remnawave_profile, with_remnawave_api
 from database import filter_cluster_by_subgroup, filter_cluster_by_tariff, get_servers, get_tariff_by_id, store_key
 from handlers.utils import ALLOWED_GROUP_CODES
 from database.models import Key, Tariff
@@ -17,7 +18,6 @@ from logger import (
     PANEL_XUI,
 )
 from panels._3xui import ClientConfig, add_client, get_xui_instance
-from panels.remnawave import RemnawaveAPI
 
 from .aggregated_links import make_aggregated_link
 from .deletion import delete_key_from_cluster
@@ -92,58 +92,67 @@ async def update_key_on_cluster(
 
         if remnawave_servers:
             inbound_ids = [s["inbound_id"] for s in remnawave_servers if s.get("inbound_id")]
-            remna = RemnawaveAPI(remnawave_servers[0]["api_url"])
-            if await remna.login(REMNAWAVE_LOGIN, REMNAWAVE_PASSWORD):
-                await remna.delete_user(client_id)
+            group_code = remnawave_servers[0].get("tariff_group")
+            if not group_code:
+                raise ValueError("У Remnawave-сервера отсутствует tariff_group")
 
-                group_code = remnawave_servers[0].get("tariff_group")
-                if not group_code:
-                    raise ValueError("У Remnawave-сервера отсутствует tariff_group")
+            _ = await session.execute(
+                select(Tariff)
+                .where(Tariff.group_code == group_code, Tariff.is_active.is_(True))
+                .order_by(Tariff.duration_days.desc())
+                .limit(1)
+            )
 
-                _ = await session.execute(
-                    select(Tariff)
-                    .where(Tariff.group_code == group_code, Tariff.is_active.is_(True))
-                    .order_by(Tariff.duration_days.desc())
-                    .limit(1)
+            short_uuid = None
+            if remnawave_link and "/" in remnawave_link:
+                short_uuid = remnawave_link.rstrip("/").split("/")[-1]
+                logger.debug(f"{PANEL_REMNA} Извлечен short_uuid: {short_uuid}")
+
+            user_data = {
+                "username": email,
+                "trafficLimitStrategy": "NO_RESET",
+                "expireAt": expire_iso,
+                "telegramId": tg_id,
+                "activeInternalSquads": inbound_ids,
+                "uuid": client_id,
+            }
+
+            if external_squad_uuid:
+                user_data["activeExternalSquads"] = [external_squad_uuid]
+                user_data["activeExternalSquadUuids"] = [external_squad_uuid]
+                user_data["externalSquadUuid"] = external_squad_uuid
+
+            if traffic_limit is not None:
+                user_data["trafficLimitBytes"] = traffic_limit * 1024**3
+            if device_limit is not None:
+                user_data["hwidDeviceLimit"] = device_limit
+            if short_uuid:
+                user_data["shortUuid"] = short_uuid
+                logger.debug(f"{PANEL_REMNA} Добавлен short_uuid: {short_uuid}")
+
+            async def _recreate(api):
+                await api.delete_user(client_id)
+                return await api.create_user(user_data)
+
+            remna_result = await with_remnawave_api(
+                session,
+                str(remnawave_servers[0].get("server_name") or cluster_id),
+                _recreate,
+                fallback_any=True,
+                timeout_sec=12.0,
+            )
+            if remna_result:
+                remnawave_client_id = remna_result.get("uuid")
+                remnawave_link_value = remna_result.get("subscriptionUrl")
+                await invalidate_remnawave_profile(
+                    session,
+                    str(remnawave_servers[0].get("server_name") or cluster_id),
+                    str(remnawave_client_id or client_id),
+                    fallback_any=True,
                 )
-
-                short_uuid = None
-                if remnawave_link and "/" in remnawave_link:
-                    short_uuid = remnawave_link.rstrip("/").split("/")[-1]
-                    logger.debug(f"{PANEL_REMNA} Извлечен short_uuid: {short_uuid}")
-
-                user_data = {
-                    "username": email,
-                    "trafficLimitStrategy": "NO_RESET",
-                    "expireAt": expire_iso,
-                    "telegramId": tg_id,
-                    "activeInternalSquads": inbound_ids,
-                    "uuid": client_id,
-                }
-
-                if external_squad_uuid:
-                    user_data["activeExternalSquads"] = [external_squad_uuid]
-                    user_data["activeExternalSquadUuids"] = [external_squad_uuid]
-                    user_data["externalSquadUuid"] = external_squad_uuid
-
-                if traffic_limit is not None:
-                    user_data["trafficLimitBytes"] = traffic_limit * 1024**3
-                if device_limit is not None:
-                    user_data["hwidDeviceLimit"] = device_limit
-                if short_uuid:
-                    user_data["shortUuid"] = short_uuid
-                    logger.debug(f"{PANEL_REMNA} Добавлен short_uuid: {short_uuid}")
-
-                result = await remna.create_user(user_data)
-                if result:
-                    remnawave_client_id = result.get("uuid")
-                    remnawave_link_value = result.get("subscriptionUrl")
-
-                    logger.info(f"{PANEL_REMNA} Клиент заново создан, uuid={remnawave_client_id}")
-                else:
-                    logger.error(f"{PANEL_REMNA} Ошибка создания клиента")
+                logger.info(f"{PANEL_REMNA} Клиент заново создан, uuid={remnawave_client_id}")
             else:
-                logger.error(f"{PANEL_REMNA} Не удалось авторизоваться")
+                logger.error(f"{PANEL_REMNA} Не удалось авторизоваться/создать клиента")
 
         if not remnawave_client_id:
             logger.warning(f"{PANEL_REMNA} client_id не получен, используем исходный {client_id}")
@@ -244,6 +253,8 @@ async def update_subscription(
     else:
         logger.warning("[LOG] update_subscription: tariff_id отсутствует!")
 
+    from middlewares.session import release_session_early
+    await release_session_early(session)
     await delete_key_from_cluster(old_cluster_id, email, client_id, session=session)
     await session.execute(delete(Key).where(Key.tg_id == tg_id, Key.email == email))
     await session.commit()

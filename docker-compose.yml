@@ -4,6 +4,32 @@ services:
     build: .
     restart: unless-stopped
     network_mode: host
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      REDIS_URL: redis://127.0.0.1:6379/0
+      BACK_DIR: /app/backups
     volumes:
       - /:/host:ro
+      - backups_data:/app/backups
+
+  redis:
+    image: redis:7-alpine
+    container_name: solobot-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  redis_data:
+  backups_data:
 

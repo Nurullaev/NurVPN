@@ -9,6 +9,7 @@ from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from config import (
+    EXECUTOR_POOL_SIZE,
     NOTIFICATION_TIME,
     NOTIFY_10H_ENABLED,
     NOTIFY_10H_HOURS,
@@ -26,6 +27,7 @@ from core.bootstrap import MODES_CONFIG, NOTIFICATIONS_CONFIG
 from database import (
     add_notification,
     check_notification_time,
+    check_notification_time_bulk,
     check_notifications_bulk,
     delete_key,
     delete_notification,
@@ -60,9 +62,15 @@ from handlers.texts import (
 from handlers.utils import format_hours, format_minutes, get_russian_month
 from hooks.hooks import run_hooks
 from logger import logger
+from middlewares.session import release_session_early, wrap_session
 
 from .hot_leads_notifications import notify_hot_leads
-from .notify_utils import prepare_key_expiry_data, send_messages_with_limit, send_notification
+from .notify_utils import (
+    NotificationRateLimiter,
+    prepare_key_expiry_data,
+    send_messages_with_limit,
+    send_notification,
+)
 from .special_notifications import notify_inactive_trial_users, notify_users_no_traffic
 
 
@@ -366,6 +374,7 @@ async def try_auto_renew(ctx: NotificationContext, key) -> tuple[bool, Optional[
 
     key_subgroup = current_tariff.get("subgroup_title")
 
+    await release_session_early(ctx.session)
     await renew_key_in_cluster(
         cluster_id=server_id,
         email=email,
@@ -416,6 +425,7 @@ async def notify_expiring_keys(
     notify_type: str,
     photo: str,
     notify_renew_enabled: bool,
+    sessionmaker: Optional[async_sessionmaker] = None,
 ):
     if min_hours > 0:
         logger.info(f"Начало проверки подписок, истекающих через {min_hours}-{max_hours} часов.")
@@ -436,7 +446,15 @@ async def notify_expiring_keys(
     allowed = await check_notifications_bulk(ctx.session, notify_type, max_hours, tg_ids=tg_ids, emails=emails)
     allowed_set = {(user["tg_id"], user["email"]) for user in allowed}
 
+    notify_pairs = [
+        (key.tg_id, f"{(key.email or '')}_{notify_type}")
+        for key in expiring_keys
+        if (key.tg_id, key.email or "") in allowed_set
+    ]
+    can_notify_set = await check_notification_time_bulk(ctx.session, notify_pairs, max_hours)
+
     messages = []
+    renew_candidates: list[tuple[Any, str]] = []
 
     for key in expiring_keys:
         tg_id = key.tg_id
@@ -446,24 +464,11 @@ async def notify_expiring_keys(
             continue
 
         notification_id = f"{email}_{notify_type}"
-
-        can_notify = await check_notification_time(ctx.session, tg_id, notification_id, hours=max_hours)
-        if not can_notify:
+        if (tg_id, notification_id) not in can_notify_set:
             continue
 
         if notify_renew_enabled:
-            try:
-                renewed, tariff, new_expiry = await try_auto_renew(ctx, key)
-
-                if renewed and tariff and new_expiry:
-                    await send_renewed_notification(ctx, key, tariff, new_expiry)
-                    await add_notification(ctx.session, tg_id, notification_id)
-                else:
-                    await send_cannot_renew(ctx, key, photo)
-                    await add_notification(ctx.session, tg_id, notification_id)
-
-            except Exception as error:
-                logger.error(f"Ошибка авто-продления/уведомления для пользователя {tg_id}: {error}")
+            renew_candidates.append((key, notification_id))
         else:
             expiry_data = await prepare_key_expiry_data(key, ctx.session, ctx.current_time)
             notification_text = KEY_EXPIRY.format(
@@ -482,6 +487,70 @@ async def notify_expiring_keys(
                 "notification_id": notification_id,
                 "email": email,
             })
+
+    
+    renew_results: list[tuple[Any, str, bool, Optional[dict], Optional[int]]] = [] 
+    use_parallel = (
+        notify_renew_enabled
+        and renew_candidates
+        and sessionmaker is not None
+        and EXECUTOR_POOL_SIZE > 1
+    )
+    if use_parallel:
+        semaphore = asyncio.Semaphore(EXECUTOR_POOL_SIZE)
+
+        async def do_one_renew(key: Any, notification_id: str) -> tuple[Any, str, bool, Optional[dict], Optional[int]]:
+            async with semaphore:
+                async with sessionmaker() as session:
+                    session = wrap_session(session, sessionmaker)
+                    ctx_key = NotificationContext(
+                        bot=ctx.bot,
+                        session=session,
+                        current_time=ctx.current_time,
+                        preload_data=ctx.preload_data,
+                        bulk_updates=None,
+                    )
+                    try:
+                        renewed, tariff, new_expiry = await try_auto_renew(ctx_key, key)
+                        await session.commit()
+                        return (key, notification_id, bool(renewed), tariff, new_expiry)
+                    except Exception as error:
+                        logger.error(
+                            "Ошибка авто-продления для пользователя %s (%s): %s",
+                            key.tg_id,
+                            getattr(key, "email", ""),
+                            error,
+                        )
+                        return (key, notification_id, False, None, None)
+
+        tasks = [do_one_renew(key, nid) for key, nid in renew_candidates]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for r in results:
+            if isinstance(r, Exception):
+                logger.error("Ошибка в задаче продления: %s", r)
+                continue
+            renew_results.append(r)
+    else:
+
+        for key, notification_id in renew_candidates:
+            tg_id = key.tg_id
+            try:
+                renewed, tariff, new_expiry = await try_auto_renew(ctx, key)
+                renew_results.append((key, notification_id, bool(renewed), tariff, new_expiry))
+            except Exception as error:
+                logger.error(f"Ошибка авто-продления/уведомления для пользователя {tg_id}: {error}")
+                renew_results.append((key, notification_id, False, None, None))
+
+    renew_rate_limiter = NotificationRateLimiter(max_rate=30, window=1.0)
+    for key, notification_id, renewed, tariff, new_expiry in renew_results:
+        tg_id = key.tg_id
+        await renew_rate_limiter.acquire()
+        if renewed and tariff and new_expiry:
+            await send_renewed_notification(ctx, key, tariff, new_expiry)
+            await add_notification(ctx.session, tg_id, notification_id)
+        else:
+            await send_cannot_renew(ctx, key, photo)
+            await add_notification(ctx.session, tg_id, notification_id)
 
     if messages:
         results = await send_messages_with_limit(ctx.bot, messages, session=ctx.session)
@@ -569,6 +638,8 @@ async def handle_expired_keys(ctx: NotificationContext, keys: list):
 
 
 async def periodic_notifications(bot: Bot, *, sessionmaker: async_sessionmaker):
+    from middlewares.session import wrap_session
+
     while True:
         notification_interval = int(NOTIFICATIONS_CONFIG.get("BASE_NOTIFICATION_MINUTE", NOTIFICATION_TIME))
 
@@ -579,14 +650,23 @@ async def periodic_notifications(bot: Bot, *, sessionmaker: async_sessionmaker):
 
         async with notification_lock:
             try:
-                async with sessionmaker() as session:
+
+                current_time = int(datetime.now(moscow_tz).timestamp() * 1000)
+                start_time = datetime.now()
+                preload_data = None
+                keys = []
+                bulk_updates = {
+                    "balance_changes": {},
+                    "key_expiry_updates": [],
+                    "key_tariff_updates": [],
+                    "notifications_to_add": [],
+                    "notifications_to_delete": [],
+                }
+
+                async with sessionmaker() as preload_session:
                     logger.info("Запуск обработки уведомлений")
-
-                    current_time = int(datetime.now(moscow_tz).timestamp() * 1000)
-                    start_time = datetime.now()
-
                     try:
-                        preload_data = await preload_notification_data(session)
+                        preload_data = await preload_notification_data(preload_session)
                         keys_data = preload_data["keys_data"]
                         keys = [data["key"] for data in keys_data.values()]
                         preload_time = (datetime.now() - start_time).total_seconds()
@@ -594,30 +674,21 @@ async def periodic_notifications(bot: Bot, *, sessionmaker: async_sessionmaker):
                             f"Предзагружено данных: {len(keys)} ключей, "
                             f"{len(preload_data['tariffs_cache'])} тарифов за {preload_time:.2f}s"
                         )
-
-                        bulk_updates = {
-                            "balance_changes": {},
-                            "key_expiry_updates": [],
-                            "key_tariff_updates": [],
-                            "notifications_to_add": [],
-                            "notifications_to_delete": [],
-                        }
-
                     except Exception as error:
                         logger.error(f"Ошибка при предварительной загрузке данных: {error}")
                         try:
-                            keys = await get_all_keys(session=session)
+                            keys = await get_all_keys(session=preload_session)
                             keys = [k for k in keys if not k.is_frozen]
                             preload_data = None
-                            bulk_updates = None
                             preload_time = (datetime.now() - start_time).total_seconds()
                             logger.info(f"Fallback: получено {len(keys)} ключей за {preload_time:.2f}s")
                         except Exception as fallback_error:
                             logger.error(f"Ошибка fallback получения ключей: {fallback_error}")
                             keys = []
                             preload_data = None
-                            bulk_updates = None
 
+                async with sessionmaker() as session:
+                    session = wrap_session(session, sessionmaker)
                     ctx = NotificationContext(
                         bot=bot,
                         session=session,
@@ -653,6 +724,7 @@ async def periodic_notifications(bot: Bot, *, sessionmaker: async_sessionmaker):
                                 notify_type="key_24h",
                                 photo="notify_24h.jpg",
                                 notify_renew_enabled=notify_renew_enabled,
+                                sessionmaker=sessionmaker,
                             )
                         except Exception as error:
                             logger.error(f"Ошибка в notify_expiring_keys (24h): {error}")
@@ -667,6 +739,7 @@ async def periodic_notifications(bot: Bot, *, sessionmaker: async_sessionmaker):
                                 notify_type="key_10h",
                                 photo="notify_10h.jpg",
                                 notify_renew_enabled=notify_renew_enabled,
+                                sessionmaker=sessionmaker,
                             )
                         except Exception as error:
                             logger.error(f"Ошибка в notify_expiring_keys (10h): {error}")
@@ -710,6 +783,7 @@ async def periodic_notifications(bot: Bot, *, sessionmaker: async_sessionmaker):
 
                     total_time = (datetime.now() - start_time).total_seconds()
                     logger.info(f"Уведомления завершены за {total_time:.2f}s")
+                    await session.commit()
 
             except Exception as error:
                 logger.error(f"Ошибка в periodic_notifications: {error}")

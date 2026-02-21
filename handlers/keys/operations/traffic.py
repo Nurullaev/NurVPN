@@ -5,12 +5,16 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from config import REMNAWAVE_LOGIN, REMNAWAVE_PASSWORD, SUPERNODE
+from config import SUPERNODE
+from panels.remnawave_runtime import (
+    get_remnawave_profile,
+    invalidate_remnawave_profile,
+    with_remnawave_api,
+)
 from database import get_servers
 from database.models import Key, Server
 from logger import logger
 from panels._3xui import get_client_traffic, get_xui_instance
-from panels.remnawave import RemnawaveAPI
 
 
 async def get_user_traffic(session: AsyncSession, tg_id: int, email: str) -> dict[str, Any]:
@@ -54,7 +58,7 @@ async def get_user_traffic(session: AsyncSession, tg_id: int, email: str) -> dic
 
     remnawave_client_id = None
     remnawave_checked = False
-    remnawave_api_url = None
+    remnawave_server_ref = None
 
     async def fetch_traffic(server_info: dict, client_id: str) -> tuple[str, Any]:
         server_name = server_info["server_name"]
@@ -88,7 +92,7 @@ async def get_user_traffic(session: AsyncSession, tg_id: int, email: str) -> dic
 
             if panel_type == "remnawave" and not remnawave_checked:
                 remnawave_client_id = client_id
-                remnawave_api_url = server_info["api_url"]
+                remnawave_server_ref = server_info.get("server_name") or server_info.get("cluster_name")
                 remnawave_checked = True
             elif panel_type == "3x-ui":
                 tasks.append(fetch_traffic(server_info, client_id))
@@ -97,22 +101,13 @@ async def get_user_traffic(session: AsyncSession, tg_id: int, email: str) -> dic
     for server, result in results:
         user_traffic_data[server] = result
 
-    if remnawave_client_id and remnawave_api_url:
-        try:
-            remna = RemnawaveAPI(remnawave_api_url)
-            if not await remna.login(REMNAWAVE_LOGIN, REMNAWAVE_PASSWORD):
-                user_traffic_data["Remnawave (общий)"] = "Не удалось авторизоваться"
-            else:
-                user_data = await remna.get_user_by_uuid(remnawave_client_id)
-                if not user_data:
-                    user_traffic_data["Remnawave (общий)"] = "Клиент не найден"
-                else:
-                    user_traffic = user_data.get("userTraffic", {})
-                    used_bytes = user_traffic.get("usedTrafficBytes", 0)
-                    used_gb = round(used_bytes / 1073741824, 2)
-                    user_traffic_data["Remnawave (общий)"] = used_gb
-        except Exception as e:
-            user_traffic_data["Remnawave (общий)"] = f"Ошибка: {e}"
+    if remnawave_client_id and remnawave_server_ref:
+        profile = await get_remnawave_profile(session, str(remnawave_server_ref), remnawave_client_id, fallback_any=True)
+        if not profile:
+            user_traffic_data["Remnawave (общий)"] = "Данные недоступны"
+        else:
+            used_gb = profile.get("used_gb")
+            user_traffic_data["Remnawave (общий)"] = round(float(used_gb), 2) if used_gb is not None else 0
 
     return {"status": "success", "traffic": user_traffic_data}
 
@@ -154,12 +149,18 @@ async def reset_traffic_in_cluster(cluster_id: str, email: str, session: AsyncSe
 
                 client_id = row[0]
 
-                remna = RemnawaveAPI(api_url)
-                if not await remna.login(REMNAWAVE_LOGIN, REMNAWAVE_PASSWORD):
-                    logger.warning(f"[Reset Traffic] Не удалось авторизоваться в Remnawave ({server_name})")
-                    continue
+                async def _reset(api):
+                    done = await api.reset_user_traffic(client_id)
+                    if done:
+                        await invalidate_remnawave_profile(
+                            session,
+                            str(server_name or cluster_id),
+                            str(client_id),
+                            fallback_any=True,
+                        )
+                    return done
 
-                tasks.append(remna.reset_user_traffic(client_id))
+                tasks.append(with_remnawave_api(session, server_name or cluster_id, _reset, fallback_any=True))
                 remnawave_done = True
                 continue
 

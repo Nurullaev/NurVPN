@@ -3,7 +3,6 @@ from __future__ import annotations
 import aiogram.types
 from pydantic import ConfigDict
 
-
 _UniqueGiftColors = getattr(aiogram.types, "UniqueGiftColors", None)
 if _UniqueGiftColors is not None:
     _cfg = getattr(_UniqueGiftColors, "model_config", None)

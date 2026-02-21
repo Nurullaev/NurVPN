@@ -5,10 +5,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import declarative_base
 
 from config import DATABASE_URL, DB_MAX_OVERFLOW, DB_POOL_SIZE
+from core.cache_config import UPDATE_STALE_AGE_SEC
 
 
 CONCURRENT_UPDATES_LIMIT = DB_POOL_SIZE + DB_MAX_OVERFLOW
-MAX_UPDATE_AGE_SEC = 15
+MAX_UPDATE_AGE_SEC = UPDATE_STALE_AGE_SEC
 
 engine = create_async_engine(
     DATABASE_URL,

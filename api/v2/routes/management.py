@@ -18,6 +18,7 @@ from api.depends import get_session, verify_identity_admin, verify_identity_admi
 from database import async_session_maker
 from config import API_TOKEN, BOT_SERVICE
 from core.bootstrap import MANAGEMENT_CONFIG
+from core.executor import get_thread_pool
 from core.settings.management_config import update_management_config
 from database.models import Key, Server, User
 from handlers.admin.sender.sender_service import BroadcastService
@@ -63,7 +64,14 @@ async def _restart_bot() -> None:
         parent = psutil.Process(os.getpid()).parent()
         is_systemd = parent and "systemd" in parent.name().lower()
         if is_systemd:
-            subprocess.run(["sudo", "systemctl", "restart", BOT_SERVICE], check=True)
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                get_thread_pool(),
+                lambda: subprocess.run(
+                    ["sudo", "systemctl", "restart", BOT_SERVICE],
+                    check=True,
+                ),
+            )
         else:
             python_exe = sys.executable
             script_path = os.path.abspath(sys.argv[0])
@@ -191,6 +199,7 @@ async def launch_broadcast(
         raise HTTPException(status_code=400, detail=f"Message too long. Max {max_len} symbols")
     async with async_session_maker() as session:
         tg_ids, total_users = await get_recipients(session, payload.send_to, (payload.cluster_name or None))
+        await session.commit()
     if not tg_ids:
         return {"success": False, "message": "No recipients found", "stats": {"total_messages": 0}}
     bot = _get_broadcast_bot()

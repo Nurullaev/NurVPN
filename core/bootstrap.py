@@ -1,4 +1,5 @@
-from database import async_session_maker, settings_cache
+from database import async_session_maker
+from database.settings_cache import settings_cache
 from database.db import warm_pool
 from database.tariffs import initialize_all_tariff_weights
 
@@ -9,6 +10,7 @@ from .settings.money_config import MONEY_CONFIG, load_money_config, update_money
 from .settings.notifications_config import NOTIFICATIONS_CONFIG, load_notifications_config, update_notifications_config
 from .settings.payments_config import PAYMENTS_CONFIG, load_payments_config, update_payments_config
 from .settings.providers_order_config import PROVIDERS_ORDER, load_providers_order, update_providers_order
+from .settings.runtime_sync import publish_runtime_snapshot
 from .settings.tariffs_config import TARIFFS_CONFIG, load_tariffs_config, update_tariffs_config
 
 
@@ -26,3 +28,4 @@ async def bootstrap() -> None:
         await load_tariffs_config(session)
         await session.commit()
         await settings_cache.load(session)
+        await publish_runtime_snapshot()

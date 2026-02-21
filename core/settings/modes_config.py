@@ -3,11 +3,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.models import Setting
 
-from database import settings_cache
+from database.settings_cache import settings_cache
 from ..defaults import DEFAULT_MODES_CONFIG
+from .runtime_sync import publish_runtime_config, register_runtime_config
 
 
 MODES_CONFIG: dict[str, bool] = DEFAULT_MODES_CONFIG.copy()
+register_runtime_config("MODES_CONFIG", MODES_CONFIG)
 
 
 async def load_modes_config(session: AsyncSession) -> None:
@@ -57,3 +59,4 @@ async def update_modes_config(session: AsyncSession, new_values: dict[str, bool]
     MODES_CONFIG.clear()
     MODES_CONFIG.update(modes_config)
     settings_cache.update("MODES_CONFIG", modes_config)
+    await publish_runtime_config("MODES_CONFIG", modes_config)

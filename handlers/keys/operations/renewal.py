@@ -4,7 +4,8 @@ from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from config import REMNAWAVE_LOGIN, REMNAWAVE_PASSWORD, SUPERNODE
+from config import SUPERNODE
+from panels.remnawave_runtime import invalidate_remnawave_profile, with_remnawave_api
 from database import (
     delete_notification,
     filter_cluster_by_subgroup,
@@ -24,7 +25,6 @@ from logger import (
     PANEL_XUI,
 )
 from panels._3xui import extend_client_key, get_xui_instance
-from panels.remnawave import RemnawaveAPI
 
 from .aggregated_links import make_aggregated_link
 from ...tariffs.subgroup_migration import migrate_between_subgroups
@@ -70,20 +70,8 @@ async def renew_on_remnawave(
             :1
         ]
 
-    remna = RemnawaveAPI(remnawave_nodes[0]["api_url"])
-    if not await remna.login(REMNAWAVE_LOGIN, REMNAWAVE_PASSWORD):
-        logger.error(f"{PANEL_REMNA} Не удалось войти в Remnawave API")
-        return False
+    server_ref = remnawave_nodes[0].get("server_name") or remnawave_nodes[0].get("api_url") or ""
     hwid_device_limit = int(hwid_device_limit or 0)
-
-    if old_device_limit is not None and hwid_device_limit < old_device_limit:
-        try:
-            await remna.clear_all_hwid_devices(client_id)
-            logger.info(
-                f"{PANEL_REMNA} HWID устройства сброшены для {client_id} (лимит {old_device_limit} → {hwid_device_limit})"
-            )
-        except Exception as e:
-            logger.warning(f"{PANEL_REMNA} Ошибка сброса HWID: {e}")
 
     expire_iso = datetime.utcfromtimestamp(new_expiry_time // 1000).isoformat() + "Z"
     traffic_limit_bytes = total_gb * 1024 * 1024 * 1024 if total_gb else 0
@@ -98,13 +86,39 @@ async def renew_on_remnawave(
         "external_squad_uuid": external_squad_uuid,
     }
 
-    updated = await remna.update_user(**update_kwargs)
-    if updated:
-        if reset_traffic:
+    async def _renew(api):
+        if old_device_limit is not None and hwid_device_limit < old_device_limit:
             try:
-                await remna.reset_user_traffic(client_id)
+                await api.clear_all_hwid_devices(client_id)
+                logger.info(
+                    f"{PANEL_REMNA} HWID устройства сброшены для {client_id} (лимит {old_device_limit} → {hwid_device_limit})"
+                )
+            except Exception as e:
+                logger.warning(f"{PANEL_REMNA} Ошибка сброса HWID: {e}")
+
+        updated_local = await api.update_user(**update_kwargs)
+        if updated_local and reset_traffic:
+            try:
+                await api.reset_user_traffic(client_id)
             except Exception as e:
                 logger.warning(f"{PANEL_REMNA} reset_user_traffic: {e}")
+        if updated_local:
+            await invalidate_remnawave_profile(
+                session,
+                str(server_ref),
+                str(client_id),
+                fallback_any=True,
+            )
+        return bool(updated_local)
+
+    updated = await with_remnawave_api(
+        session,
+        str(server_ref),
+        _renew,
+        fallback_any=True,
+        timeout_sec=12.0,
+    )
+    if updated:
         logger.info(f"{PANEL_REMNA} Подписка {client_id} успешно продлена")
         return True
     logger.debug(f"{PANEL_REMNA} Не удалось продлить {client_id}. Автосоздание отключено.")

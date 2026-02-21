@@ -20,11 +20,18 @@ from config import (
     USE_COUNTRY_SELECTION,
 )
 from core.bootstrap import MODES_CONFIG
+from core.cache_config import (
+    SUBSCRIPTION_HANDLER_CONCURRENCY,
+    SUBSCRIPTION_RESPONSE_CACHE_TTL_SEC,
+)
+from core.redis_cache import cache_get, cache_key, cache_set
 from database import get_key_details, get_servers
 from database.models import Server
 from handlers.texts import HAPP_ANNOUNCE, HIDDIFY_PROFILE_TITLE, SUBSCRIPTION_INFO_TEXT, V2RAYTUN_ANNOUNCE
 from handlers.utils import convert_to_bytes
 from logger import logger
+
+_subscription_semaphore = asyncio.Semaphore(SUBSCRIPTION_HANDLER_CONCURRENCY)
 
 
 async def fetch_url_content(url: str, identifier: str) -> tuple[list[str], dict[str, str]]:
@@ -246,41 +253,55 @@ async def handle_subscription(request: web.Request) -> web.Response:
     if not email or not tg_id:
         return web.Response(text="❌ Неверные параметры запроса.", status=400)
 
+    cache_key_sub = cache_key("sub_response", email, tg_id)
+    cached = await cache_get(cache_key_sub)
+    if isinstance(cached, dict) and "b" in cached and "h" in cached:
+        return web.Response(text=cached["b"], headers=cached["h"])
+
     sessionmaker = request.app["sessionmaker"]
 
-    async with sessionmaker() as session:
-        try:
-            key = await get_key_details(session, email)
-            if not key:
-                return web.Response(text="❌ Клиент с таким email не найден.", status=404)
+    async with _subscription_semaphore:
+        async with sessionmaker() as session:
+            try:
+                key = await get_key_details(session, email)
+                if not key:
+                    return web.Response(text="❌ Клиент с таким email не найден.", status=404)
 
-            if int(tg_id) != int(key["tg_id"]):
-                return web.Response(text="❌ Неверные данные. Получите свой ключ в боте.", status=403)
+                if int(tg_id) != int(key["tg_id"]):
+                    return web.Response(text="❌ Неверные данные. Получите свой ключ в боте.", status=403)
 
-            expiry_time_ms = key["expiry_time"]
-            server_id = key["server_id"]
-            remnawave_link = key["remnawave_link"]
+                expiry_time_ms = key["expiry_time"]
+                server_id = key["server_id"]
+                remnawave_link = key["remnawave_link"]
 
-            time_left = format_time_left(expiry_time_ms)
+                time_left = format_time_left(expiry_time_ms)
 
-            urls = await get_subscription_urls(server_id, email, session, include_remnawave_key=remnawave_link)
-            if not urls:
-                return web.Response(text="❌ Сервер не найден.", status=404)
+                urls = await get_subscription_urls(server_id, email, session, include_remnawave_key=remnawave_link)
+                if not urls:
+                    return web.Response(text="❌ Сервер не найден.", status=404)
 
-            query_string = request.query_string
-            combined_subscriptions, headers_list = await combine_unique_lines(urls, tg_id or email, query_string)
+                query_string = request.query_string
+                combined_subscriptions, headers_list = await combine_unique_lines(urls, tg_id or email, query_string)
 
-            cleaned_subscriptions = [clean_subscription_line(line) for line in combined_subscriptions]
+                cleaned_subscriptions = [clean_subscription_line(line) for line in combined_subscriptions]
 
-            base64_encoded = base64.b64encode("\n".join(cleaned_subscriptions).encode("utf-8")).decode("utf-8")
-            subscription_info = SUBSCRIPTION_INFO_TEXT.format(email=email, time_left=time_left)
+                base64_encoded = base64.b64encode("\n".join(cleaned_subscriptions).encode("utf-8")).decode("utf-8")
+                subscription_info = SUBSCRIPTION_INFO_TEXT.format(email=email, time_left=time_left)
 
-            user_agent = request.headers.get("User-Agent", "")
-            subscription_userinfo = calculate_traffic(cleaned_subscriptions, expiry_time_ms, headers_list)
-            headers = prepare_headers(user_agent, PROJECT_NAME, subscription_info, subscription_userinfo)
+                user_agent = request.headers.get("User-Agent", "")
+                subscription_userinfo = calculate_traffic(cleaned_subscriptions, expiry_time_ms, headers_list)
+                headers = prepare_headers(user_agent, PROJECT_NAME, subscription_info, subscription_userinfo)
 
-            return web.Response(text=base64_encoded, headers=headers)
+                await session.commit()
 
-        except Exception as e:
-            logger.error(f"Ошибка в handle_subscription: {e}", exc_info=True)
-            return web.Response(text=f"❌ Ошибка сервера: {e}", status=500)
+                await cache_set(
+                    cache_key_sub,
+                    {"b": base64_encoded, "h": dict(headers)},
+                    SUBSCRIPTION_RESPONSE_CACHE_TTL_SEC,
+                )
+                return web.Response(text=base64_encoded, headers=headers)
+
+            except Exception as e:
+                await session.rollback()
+                logger.error(f"Ошибка в handle_subscription: {e}", exc_info=True)
+                return web.Response(text=f"❌ Ошибка сервера: {e}", status=500)

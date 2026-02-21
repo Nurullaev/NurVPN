@@ -4,23 +4,47 @@ from typing import Any
 
 from aiogram import BaseMiddleware
 from aiogram.types import CallbackQuery, Message, TelegramObject, Update
-from cachetools import TTLCache
 from pytz import timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import ADMIN_ID, SUPPORT_CHAT_URL
+from core.cache_config import BAN_CACHE_TTL_SEC
+from core.redis_cache import cache_get, cache_key, cache_set
+from database import async_session_maker
 from database.models import ManualBan
 from logger import logger
 
 
 TZ = timezone("Europe/Moscow")
-_BAN_CACHE_TTL = 30
-_ban_cache: TTLCache[int, tuple[float, dict | None]] = TTLCache(maxsize=50_000, ttl=_BAN_CACHE_TTL)
+_BAN_CACHE_TTL = BAN_CACHE_TTL_SEC
 
 
 class BanCheckerMiddleware(BaseMiddleware):
     """Проверка банов."""
+
+    async def _load_ban_info(self, session: AsyncSession, tg_id: int) -> dict[str, Any] | None:
+        query = (
+            select(ManualBan.reason, ManualBan.until)
+            .where(
+                ManualBan.tg_id == tg_id,
+                (ManualBan.until.is_(None)) | (ManualBan.until > datetime.utcnow()),
+            )
+            .limit(1)
+        )
+        result = await session.execute(query)
+        row = result.first()
+        if row:
+            reason, until = row
+            await cache_set(
+                cache_key("ban_status", tg_id),
+                {"has_ban": True, "reason": reason or "не указана", "until": until.isoformat() if until else None},
+                _BAN_CACHE_TTL,
+            )
+            return {"reason": reason or "не указана", "until": until}
+
+        await cache_set(cache_key("ban_status", tg_id), {"has_ban": False}, _BAN_CACHE_TTL)
+        return None
 
     async def __call__(
         self,
@@ -45,33 +69,30 @@ class BanCheckerMiddleware(BaseMiddleware):
         if tg_id is None:
             return await handler(event, data)
 
-        now_ts = datetime.utcnow().timestamp()
-        cached = _ban_cache.get(tg_id)
-        if cached and cached[0] > now_ts:
-            ban_info = cached[1]
+        cached = await cache_get(cache_key("ban_status", tg_id))
+        if isinstance(cached, dict):
+            if not cached.get("has_ban"):
+                ban_info = None
+            else:
+                until_raw = cached.get("until")
+                until_parsed = None
+                if isinstance(until_raw, str):
+                    try:
+                        until_parsed = datetime.fromisoformat(until_raw)
+                    except ValueError:
+                        until_parsed = None
+                ban_info = {
+                    "reason": cached.get("reason") or "не указана",
+                    "until": until_parsed,
+                }
         else:
             session = data.get("session")
-            if not isinstance(session, AsyncSession):
-                logger.error("[BanChecker] session отсутствует в data")
-                return await handler(event, data)
-
-            query = (
-                select(ManualBan.reason, ManualBan.until)
-                .where(
-                    ManualBan.tg_id == tg_id,
-                    (ManualBan.until.is_(None)) | (ManualBan.until > datetime.utcnow()),
-                )
-                .limit(1)
-            )
-            result = await session.execute(query)
-            row = result.first()
-            if row:
-                reason, until = row
-                ban_info = {"reason": reason or "не указана", "until": until}
+            if session is not None and getattr(session, "execute", None) is not None:
+                ban_info = await self._load_ban_info(session, tg_id)
             else:
-                ban_info = None
-
-            _ban_cache[tg_id] = (now_ts + _BAN_CACHE_TTL, ban_info)
+                async with async_session_maker() as short_session:
+                    ban_info = await self._load_ban_info(short_session, tg_id)
+                    await short_session.commit()
 
         if not ban_info:
             return await handler(event, data)

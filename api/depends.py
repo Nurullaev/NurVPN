@@ -12,7 +12,12 @@ from database.models import Admin
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
     async with async_session_maker() as session:
-        yield session
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
 
 
 def hash_token(token: str) -> str:
@@ -65,6 +70,7 @@ async def verify_identity_admin_short(
     """Проверка админа с короткой сессией (для broadcast и др.), чтобы не держать соединение с БД."""
     async with async_session_maker() as session:
         identity = await idb.verify_identity_token(session, x_identity_id, token)
+        await session.commit()
     if not identity:
         raise HTTPException(status_code=401, detail="Unauthorized")
     if not identity.is_admin:
@@ -81,6 +87,7 @@ async def verify_admin_token_short(
     async with async_session_maker() as session:
         result = await session.execute(select(Admin).where(Admin.tg_id == admin_id, Admin.token == hashed))
         admin = result.scalar_one_or_none()
+        await session.commit()
     if not admin:
         raise HTTPException(status_code=401, detail="Unauthorized")
     return admin

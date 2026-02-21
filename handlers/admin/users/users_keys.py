@@ -815,6 +815,7 @@ async def handle_delete_key_confirm(
 
     if client_id:
         clusters = await get_servers(session=session)
+        await session.release_early()
 
         async def delete_key_from_servers():
             tasks = []
@@ -862,6 +863,7 @@ async def handle_delete_user_confirm(
 
     result = await session.execute(select(Key.email, Key.client_id).where(Key.tg_id == tg_id))
     key_records = result.all()
+    await session.release_early()
 
     async def delete_keys_from_servers():
         try:
@@ -1283,6 +1285,7 @@ async def handle_admin_unfreeze_subscription(
 
         await mark_key_as_unfrozen(session, record["tg_id"], client_id, new_expiry_time)
         await session.commit()
+        await session.release_early()
 
         await renew_key_in_cluster(
             cluster_id=cluster_id,
@@ -1360,6 +1363,9 @@ async def change_expiry_time(expiry_time: int, email: str, session: AsyncSession
 
         if not target_cluster:
             return ValueError(f"No suitable cluster found for server {server_id}")
+
+    from middlewares.session import release_session_early
+    await release_session_early(session)
 
     await renew_key_in_cluster(
         cluster_id=target_cluster,
@@ -1747,6 +1753,7 @@ async def handle_cfg_save(callback_query: CallbackQuery, state: FSMContext, sess
         return
 
     try:
+        await session.release_early()
         await renew_key_in_cluster(
             cluster_id=key_obj.server_id,
             email=email,

@@ -97,6 +97,7 @@ def setup_error_handlers(dp: Dispatcher) -> None:
                                 admin=False,
                                 captcha=False,
                             )
+                            await session.commit()
                     elif event.update.callback_query:
                         fsm_context = dp.fsm.get_context(
                             bot=bot,
@@ -111,6 +112,7 @@ def setup_error_handlers(dp: Dispatcher) -> None:
                                 admin=False,
                                 captcha=False,
                             )
+                            await session.commit()
                 except Exception as e:
                     logger.error(f"Ошибка при показе стартового меню после ошибки: {e}", exc_info=True)
 
@@ -150,6 +152,7 @@ def setup_error_handlers(dp: Dispatcher) -> None:
                         admin=False,
                         captcha=False,
                     )
+                    await session.commit()
             elif event.update.callback_query:
                 fsm_context = dp.fsm.get_context(
                     bot=bot,
@@ -164,6 +167,7 @@ def setup_error_handlers(dp: Dispatcher) -> None:
                         admin=False,
                         captcha=False,
                     )
+                    await session.commit()
 
         except TelegramBadRequest as exception:
             logger.warning(f"Не удалось отправить детали ошибки: {exception}")

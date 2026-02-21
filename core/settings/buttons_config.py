@@ -3,13 +3,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.models import Setting
 
-from database import settings_cache
+from database.settings_cache import settings_cache
 from ..defaults import DEFAULT_BUTTONS_CONFIG
+from .runtime_sync import publish_runtime_config, register_runtime_config
 
 
 BUTTONS_CONFIG: dict[str, bool] = DEFAULT_BUTTONS_CONFIG.copy()
 BUTTONS_CONFIG.setdefault("ANDROID_TV_BUTTON_ENABLE", False)
 BUTTONS_CONFIG.setdefault("COUPON_BUTTON_ENABLE", True)
+register_runtime_config("BUTTONS_CONFIG", BUTTONS_CONFIG)
 
 
 async def load_buttons_config(session: AsyncSession) -> None:
@@ -65,3 +67,4 @@ async def update_buttons_config(session: AsyncSession, new_values: dict[str, boo
     BUTTONS_CONFIG.clear()
     BUTTONS_CONFIG.update(buttons_config)
     settings_cache.update("BUTTONS_CONFIG", buttons_config)
+    await publish_runtime_config("BUTTONS_CONFIG", buttons_config)

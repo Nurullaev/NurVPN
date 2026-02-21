@@ -42,6 +42,7 @@ class IsAdminFilter(BaseFilter):
                 is_admin = admin is not None or user_id in admin_ids
                 is_super = admin.role != "moderator" if admin else (user_id in admin_ids)
                 _set_cached_admin(user_id, is_admin, is_super)
+                await session.commit()
                 return is_admin
         except (Exception,):
             return False
@@ -62,9 +63,11 @@ class IsSuperAdminFilter(BaseFilter):
                 admin = (await session.execute(select(Admin).where(Admin.tg_id == user_id))).scalar_one_or_none()
                 if not admin:
                     _set_cached_admin(user_id, False, False)
+                    await session.commit()
                     return False
                 is_super = admin.role != "moderator"
                 _set_cached_admin(user_id, True, is_super)
+                await session.commit()
                 return is_super
         except (Exception,):
             return False

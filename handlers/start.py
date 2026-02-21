@@ -22,6 +22,8 @@ from config import (
     TRIAL_TIME_DISABLE,
 )
 from core.bootstrap import BUTTONS_CONFIG, MODES_CONFIG
+from core.cache_config import START_UTM_EXISTS_TTL_SEC
+from core.redis_cache import cache_get, cache_key, cache_set
 from database import (
     add_user,
     get_coupon_by_code,
@@ -261,8 +263,13 @@ async def prompt_subscription(callback: CallbackQuery):
 
 
 async def handle_utm_link(utm_code: str, message: Message, state: FSMContext, session: AsyncSession, user_data: dict):
-    res = await session.execute(select(TrackingSource).where(TrackingSource.code == utm_code))
-    if not res.scalar_one_or_none():
+    is_known = await cache_get(cache_key("utm_exists", utm_code))
+    if is_known is None:
+        res = await session.execute(select(TrackingSource).where(TrackingSource.code == utm_code))
+        is_known = res.scalar_one_or_none() is not None
+        await cache_set(cache_key("utm_exists", utm_code), bool(is_known), START_UTM_EXISTS_TTL_SEC)
+
+    if not is_known:
         await message.answer("❌ UTM ссылка не найдена.")
         return
     await upsert_source_if_empty(session, user_data["tg_id"], utm_code)

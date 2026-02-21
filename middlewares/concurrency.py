@@ -6,6 +6,8 @@ from typing import Any
 from aiogram import BaseMiddleware, Bot
 from aiogram.types import CallbackQuery, Message, TelegramObject
 
+from core.cache_config import CONCURRENCY_REJECT_NOTICE_TTL_SEC
+from core.redis_cache import cache_key, cache_setnx
 from database.db import CONCURRENT_UPDATES_LIMIT, MAX_UPDATE_AGE_SEC
 
 
@@ -17,6 +19,7 @@ class ConcurrencyLimiterMiddleware(BaseMiddleware):
 
     def __init__(self) -> None:
         self._semaphore = asyncio.Semaphore(CONCURRENT_UPDATES_LIMIT)
+        self._notice_ttl = CONCURRENCY_REJECT_NOTICE_TTL_SEC
 
     async def __call__(
         self,
@@ -38,7 +41,13 @@ class ConcurrencyLimiterMiddleware(BaseMiddleware):
     async def _reject_stale(self, event: TelegramObject, data: dict[str, Any]) -> None:
         if isinstance(event, CallbackQuery):
             bot: Bot = data.get("bot")
-            if bot:
+            uid = event.from_user.id if event.from_user else None
+            should_notify = (
+                bot
+                and uid is not None
+                and await cache_setnx(cache_key("concurrency_notice", uid), 1, self._notice_ttl)
+            )
+            if should_notify:
                 try:
                     await bot.answer_callback_query(
                         event.id,
@@ -49,7 +58,13 @@ class ConcurrencyLimiterMiddleware(BaseMiddleware):
                     pass
         elif isinstance(event, Message) and event.text and event.chat:
             bot: Bot = data.get("bot")
-            if bot:
+            uid = event.from_user.id if event.from_user else None
+            should_notify = (
+                bot
+                and uid is not None
+                and await cache_setnx(cache_key("concurrency_notice", uid), 1, self._notice_ttl)
+            )
+            if should_notify:
                 try:
                     await bot.send_message(
                         event.chat.id,

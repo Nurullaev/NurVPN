@@ -2,9 +2,9 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from config import REMNAWAVE_LOGIN, REMNAWAVE_PASSWORD
+from panels.remnawave_runtime import get_remnawave_profile
 from core.settings.tariffs_config import TARIFFS_CONFIG, normalize_tariff_config
-from database import get_servers, get_tariff_by_id
+from database import get_tariff_by_id
 from database.models import Key
 from handlers.texts import key_message_success
 from logger import logger
@@ -191,56 +191,26 @@ async def get_key_tariff_display(
 
     if server_cluster_id and client_id:
         try:
-            servers = await get_servers(session)
-            cluster_servers = servers.get(server_cluster_id) or servers.get(str(server_cluster_id)) or []
-            remna_server = next((srv for srv in cluster_servers if srv.get("panel_type") == "remnawave"), None)
-            if not remna_server:
-                remna_server = next(
-                    (srv for cl in servers.values() for srv in cl if srv.get("panel_type") == "remnawave"),
-                    None,
-                )
+            profile = await get_remnawave_profile(session, str(server_cluster_id), client_id, fallback_any=True)
+            if profile:
+                panel_traffic_limit_bytes = profile.get("traffic_limit_bytes")
+                panel_device_limit = profile.get("hwid_device_limit")
 
-            if remna_server:
-                from panels.remnawave import RemnawaveAPI
-
-                api = RemnawaveAPI(remna_server["api_url"])
-                try:
-                    ok = await api.login(REMNAWAVE_LOGIN, REMNAWAVE_PASSWORD)
-                except Exception as e:
-                    logger.warning(f"[KeyTariffDisplay] Remnawave login error for {client_id}: {e}")
-                    ok = False
-
-                if ok:
+                if panel_traffic_limit_bytes is not None:
                     try:
-                        user_data = await api.get_user_by_uuid(client_id)
-                    except Exception as e:
-                        logger.warning(f"[KeyTariffDisplay] Remnawave get_user_by_uuid error for {client_id}: {e}")
-                        user_data = None
+                        traffic_limit_bytes = int(panel_traffic_limit_bytes)
+                    except (TypeError, ValueError):
+                        logger.warning(
+                            f"[KeyTariffDisplay] Invalid trafficLimitBytes from Remnawave for {client_id}: {panel_traffic_limit_bytes}"
+                        )
 
-                    if user_data:
-                        panel_traffic_limit_bytes = user_data.get("trafficLimitBytes")
-                        panel_device_limit = user_data.get("hwidDeviceLimit")
-
-                        if panel_traffic_limit_bytes is not None:
-                            try:
-                                traffic_limit_bytes = int(panel_traffic_limit_bytes)
-                            except (TypeError, ValueError):
-                                logger.warning(
-                                    f"[KeyTariffDisplay] Invalid trafficLimitBytes from Remnawave for {client_id}: {panel_traffic_limit_bytes}"
-                                )
-
-                        if panel_device_limit is not None:
-                            try:
-                                device_limit = int(panel_device_limit)
-                            except (TypeError, ValueError):
-                                logger.warning(
-                                    f"[KeyTariffDisplay] Invalid hwidDeviceLimit from Remnawave for {client_id}: {panel_device_limit}"
-                                )
-
-                try:
-                    await api.aclose()
-                except Exception:
-                    pass
+                if panel_device_limit is not None:
+                    try:
+                        device_limit = int(panel_device_limit)
+                    except (TypeError, ValueError):
+                        logger.warning(
+                            f"[KeyTariffDisplay] Invalid hwidDeviceLimit from Remnawave for {client_id}: {panel_device_limit}"
+                        )
         except Exception as e:
             logger.warning(f"[KeyTariffDisplay] Error while overriding limits from panel: {e}")
 

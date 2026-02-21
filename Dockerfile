@@ -20,7 +20,9 @@ RUN rm -rf /app/venv \
     && /app/venv/bin/pip install --upgrade pip \
     && /app/venv/bin/pip install -r requirements.txt
 
-RUN adduser --disabled-password --gecos "" appuser && chown -R appuser:appuser /app
+RUN adduser --disabled-password --gecos "" appuser \
+    && mkdir -p /app/backups \
+    && chown -R appuser:appuser /app
 USER appuser
 
 CMD ["/app/venv/bin/python", "main.py"]
