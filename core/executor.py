@@ -1,9 +1,13 @@
+import asyncio
 import atexit
 import signal
 import multiprocessing
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from typing import Callable, TypeVar
 
 from logger import logger
+
+T = TypeVar("T")
 
 _thread_pool: ThreadPoolExecutor | None = None
 _process_pool: ProcessPoolExecutor | None = None
@@ -30,7 +34,7 @@ def get_thread_pool() -> ThreadPoolExecutor:
         from config import EXECUTOR_POOL_SIZE
         size = max(1, int(EXECUTOR_POOL_SIZE))
         _thread_pool = ThreadPoolExecutor(max_workers=size, thread_name_prefix="bot-thread")
-        logger.debug("Thread pool started (workers=%s)", size)
+        logger.debug("[Executor] Пул потоков: {} воркеров", size)
     return _thread_pool
 
 
@@ -40,7 +44,7 @@ def shutdown_thread_pool() -> None:
     if _thread_pool is not None:
         _thread_pool.shutdown(wait=True)
         _thread_pool = None
-        logger.debug("Thread pool shut down")
+        logger.debug("[Executor] Пул потоков остановлен")
 
 
 def get_process_pool() -> ProcessPoolExecutor:
@@ -56,7 +60,7 @@ def get_process_pool() -> ProcessPoolExecutor:
         ctx.Process = _IgnoreSIGINTProcess
         _process_pool = ProcessPoolExecutor(max_workers=size, mp_context=ctx)
         atexit.register(_atexit_shutdown_pools)
-        logger.debug("Process pool started (workers=%s)", size)
+        logger.debug("[Executor] Пул процессов: {} воркеров", size)
     return _process_pool
 
 
@@ -70,4 +74,16 @@ def shutdown_process_pool() -> None:
             pass
         _process_pool.shutdown(wait=True)
         _process_pool = None
-        logger.debug("Process pool shut down")
+        logger.debug("[Executor] Пул процессов остановлен")
+
+
+async def run_io(fn: Callable[..., T], *args: object) -> T:
+    """Выполняет fn(*args) в пуле потоков (I/O). Один вызов для всех блокирующих операций."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(get_thread_pool(), lambda: fn(*args))
+
+
+async def run_cpu(fn: Callable[..., T], *args: object) -> T:
+    """Выполняет fn(*args) в пуле процессов (CPU). fn — функция уровня модуля (для pickle)."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(get_process_pool(), fn, *args)

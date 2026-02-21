@@ -48,6 +48,21 @@ from logger import logger
 router = Router()
 
 
+def generate_key_qr_file(qr_data: str, email: str) -> str:
+    """Генерация QR в файл. Вызывать через run_cpu(). Возвращает путь к файлу."""
+    qr = qrcode.QRCode(version=1, box_size=10, border=4)
+    qr.add_data(qr_data)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    buffer = BytesIO()
+    img.save(buffer, format="PNG")
+    buffer.seek(0)
+    qr_path = f"/tmp/qrcode_{email}.png"
+    with open(qr_path, "wb") as f:
+        f.write(buffer.read())
+    return qr_path
+
+
 @router.callback_query(F.data.startswith("connect_device|"))
 async def handle_connect_device(callback_query: CallbackQuery, session: AsyncSession):
     try:
@@ -226,18 +241,9 @@ async def show_qr_code(callback_query: types.CallbackQuery, session: AsyncSessio
             await callback_query.message.answer("❌ У этой подписки отсутствует ссылка для подключения.")
             return
 
-        qr = qrcode.QRCode(version=1, box_size=10, border=4)
-        qr.add_data(qr_data)
-        qr.make(fit=True)
+        from core.executor import run_cpu
 
-        img = qr.make_image(fill_color="black", back_color="white")
-        buffer = BytesIO()
-        img.save(buffer, format="PNG")
-        buffer.seek(0)
-
-        qr_path = f"/tmp/qrcode_{record.email}.png"
-        with open(qr_path, "wb") as f:
-            f.write(buffer.read())
+        qr_path = await run_cpu(generate_key_qr_file, qr_data, record.email)
 
         builder = InlineKeyboardBuilder()
         builder.row(InlineKeyboardButton(text=BACK, callback_data=f"view_key|{record.email}"))

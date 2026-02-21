@@ -6,6 +6,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from core.executor import run_io
 from filters.admin import IsAdminFilter
 from logger import logger
 
@@ -79,7 +80,7 @@ async def handle_admin_file_upload(message: Message, state: FSMContext):
     else:
         base_dir = os.path.abspath(".")
 
-    os.makedirs(base_dir, exist_ok=True)
+    await run_io(lambda: os.makedirs(base_dir, exist_ok=True))
     dest_path = os.path.join(base_dir, file_name)
 
     try:

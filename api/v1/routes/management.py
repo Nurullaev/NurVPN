@@ -18,7 +18,7 @@ from api.depends import get_session, verify_admin_token, verify_admin_token_shor
 from database import async_session_maker
 from config import API_TOKEN, BOT_SERVICE
 from core.bootstrap import MANAGEMENT_CONFIG
-from core.executor import get_thread_pool
+from core.executor import run_io
 from core.settings.management_config import update_management_config
 from database.models import Key, User
 from database.models import Server
@@ -65,14 +65,7 @@ async def _restart_bot() -> None:
         is_systemd = parent and "systemd" in parent.name().lower()
 
         if is_systemd:
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(
-                get_thread_pool(),
-                lambda: subprocess.run(
-                    ["sudo", "systemctl", "restart", BOT_SERVICE],
-                    check=True,
-                ),
-            )
+            await run_io(lambda: subprocess.run(["sudo", "systemctl", "restart", BOT_SERVICE], check=True))
         else:
             python_exe = sys.executable
             script_path = os.path.abspath(sys.argv[0])

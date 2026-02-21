@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from api.depends import verify_admin_token
+from core.executor import run_io
 from utils.modules_loader import _is_safe_module_name
 from utils.modules_manager import manager
 
@@ -80,24 +81,23 @@ def _read_local_module_version(name: str) -> str | None:
     return None
 
 
-@router.get("/")
-async def list_modules(admin=Depends(verify_admin_token)):
-    refresh = getattr(manager, "refresh_state", None)
+def sync_list_modules() -> list:
+    """Вся синхронная работа со списком модулей (файлы, состояние). Вызывать через run_io()."""
+    refresh = getattr(manager, "refresh_state", None) or getattr(manager, "_load_state", None)
     if callable(refresh):
         refresh()
-    else:
-        legacy_refresh = getattr(manager, "_load_state", None)
-        if callable(legacy_refresh):
-            legacy_refresh()
     module_names = _available_module_names()
     _prune_missing_state(set(module_names))
     modules = [_module_state(name) for name in module_names]
-
     for item in modules:
         name = str(item.get("name") or "").strip()
-        local_version = _read_local_module_version(name)
-        item["local_version"] = local_version
+        item["local_version"] = _read_local_module_version(name)
+    return modules
 
+
+@router.get("/")
+async def list_modules(admin=Depends(verify_admin_token)):
+    modules = await run_io(sync_list_modules)
     return {"items": modules}
 
 

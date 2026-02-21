@@ -6,7 +6,7 @@ import sys
 import psutil
 
 from aiogram import F, Router
-from core.executor import get_thread_pool
+from core.executor import run_io
 from aiogram.types import CallbackQuery
 
 from filters.admin import IsAdminFilter
@@ -33,14 +33,7 @@ async def restart_bot():
         is_systemd = parent and "systemd" in parent.name().lower()
 
         if is_systemd:
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(
-                get_thread_pool(),
-                lambda: subprocess.run(
-                    ["sudo", "systemctl", "restart", "bot.service"],
-                    check=True,
-                ),
-            )
+            await run_io(lambda: subprocess.run(["sudo", "systemctl", "restart", "bot.service"], check=True))
         else:
             python_exe = sys.executable
             script_path = os.path.abspath(sys.argv[0])

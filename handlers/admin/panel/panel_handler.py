@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database.models import Admin
 from filters.admin import IsAdminFilter
 from logger import logger
+from core.executor import run_io
 from utils.versioning import get_version
 
 from .keyboard import AdminPanelCallback, build_panel_kb
@@ -19,7 +20,7 @@ router = Router()
 
 @router.callback_query(AdminPanelCallback.filter(F.action == "admin"), IsAdminFilter())
 async def handle_admin_callback_query(callback_query: CallbackQuery, state: FSMContext, session: AsyncSession):
-    text = f"🤖 Панель администратора\n\nВерсия бота:\n<blockquote>{get_version()}</blockquote>"
+    text = f"🤖 Панель администратора\n\nВерсия бота:\n<blockquote>{await run_io(get_version)}</blockquote>"
 
     await state.clear()
 
@@ -60,7 +61,7 @@ async def handle_admin_callback_query_simple(callback_query: CallbackQuery, stat
 
 @router.message(Command("admin"), IsAdminFilter())
 async def handle_admin_message(message: Message, state: FSMContext, session: AsyncSession):
-    text = f"🤖 Панель администратора\n\nВерсия бота:\n<blockquote>{get_version()}</blockquote>"
+    text = f"🤖 Панель администратора\n\nВерсия бота:\n<blockquote>{await run_io(get_version)}</blockquote>"
 
     await state.clear()
 

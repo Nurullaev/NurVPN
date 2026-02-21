@@ -737,7 +737,7 @@ async def select_tariff_plan(callback_query: CallbackQuery, session: Any, state:
     tg_id = callback_query.from_user.id
     tariff_id = int(callback_query.data.split("|")[1])
 
-    logger.info("[TARIFF_CFG] select_tariff_plan: tg_id=%s tariff_id=%s", tg_id, tariff_id)
+    logger.info("[TARIFF_CFG] select_tariff_plan: tg_id={} tariff_id={}", tg_id, tariff_id)
 
     tariff = await get_tariff_by_id(session, tariff_id)
     if not tariff:

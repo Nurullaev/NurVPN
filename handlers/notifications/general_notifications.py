@@ -527,7 +527,7 @@ async def notify_expiring_keys(
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for r in results:
             if isinstance(r, Exception):
-                logger.error("Ошибка в задаче продления: %s", r)
+                logger.error("Ошибка в задаче продления: {}", r)
                 continue
             renew_results.append(r)
     else:

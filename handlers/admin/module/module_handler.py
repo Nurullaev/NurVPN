@@ -6,6 +6,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.executor import run_io
 from filters.admin import IsAdminFilter
 from handlers.admin.panel.keyboard import AdminPanelCallback
 from utils.modules_manager import manager
@@ -50,7 +51,7 @@ async def handle_modules(callback_query: CallbackQuery, state: FSMContext, sessi
     packed = AdminPanelCallback.unpack(callback_query.data)
     page = max(1, packed.page or 1)
 
-    all_items = list_installed_modules()
+    all_items = await run_io(list_installed_modules)
     items = [(n, v) for n, v in all_items if n != "web_admin_panel"]
 
     per_page = 12
@@ -100,7 +101,7 @@ async def handle_module_restart(callback_query: CallbackQuery, state: FSMContext
     except Exception as e:
         result = f"❌ Ошибка перезапуска: {e}"
 
-    items = dict(list_installed_modules())
+    items = dict(await run_io(list_installed_modules))
     ver = items.get(name)
     title = f"{name} v{ver}" if ver else name
     text = f"🧩 Модуль: <b>{title}</b>\n\n{result}"
@@ -129,7 +130,7 @@ async def handle_module_stop(callback_query: CallbackQuery, state: FSMContext, s
     except Exception as e:
         result = f"❌ Ошибка остановки: {e}"
 
-    items = dict(list_installed_modules())
+    items = dict(await run_io(list_installed_modules))
     ver = items.get(name)
     title = f"{name} v{ver}" if ver else name
     text = f"🧩 Модуль: <b>{title}</b>\n\n{result}"
@@ -158,7 +159,7 @@ async def handle_module_start(callback_query: CallbackQuery, state: FSMContext, 
     except Exception as e:
         result = f"❌ Ошибка запуска: {e}"
 
-    items = dict(list_installed_modules())
+    items = dict(await run_io(list_installed_modules))
     ver = items.get(name)
     title = f"{name} v{ver}" if ver else name
     text = f"🧩 Модуль: <b>{title}</b>\n\n{result}"

@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import API_TOKEN_TTL_DAYS
+from core.executor import run_cpu, run_io
 from database.models import Admin, Identity, User
 
 
@@ -90,7 +91,7 @@ async def get_identity_by_token_hash(session: AsyncSession, token_hash: str) -> 
 async def issue_token_for_identity(session: AsyncSession, identity: Identity) -> str:
     """Генерирует токен, сохраняет хеш и token_issued_at в identity, возвращает токен (показать один раз)."""
     token = generate_token()
-    identity.api_token_hash = hash_token(token)
+    identity.api_token_hash = await run_io(hash_token, token)
     identity.token_issued_at = datetime.utcnow()
     await session.commit()
     await session.refresh(identity)
@@ -114,7 +115,7 @@ async def create_identity_with_token(
     """Создаёт идентичность и выдаёт API-токен. При регистрации по почте передать email и password."""
     identity = await create_identity(session, email=email, tg_id=tg_id)
     if password:
-        identity.password_hash = hash_password(password)
+        identity.password_hash = await run_cpu(hash_password, password)
         await session.commit()
         await session.refresh(identity)
     token = await issue_token_for_identity(session, identity)
@@ -126,7 +127,8 @@ async def verify_identity_token(session: AsyncSession, identity_id: str, token: 
     identity = await get_identity_by_id(session, identity_id)
     if not identity or not identity.api_token_hash:
         return None
-    if hash_token(token) != identity.api_token_hash:
+    token_hash = await run_io(hash_token, token)
+    if token_hash != identity.api_token_hash:
         return None
     if _is_token_expired(identity):
         return None
@@ -136,7 +138,9 @@ async def verify_identity_token(session: AsyncSession, identity_id: str, token: 
 async def login_by_email(session: AsyncSession, email: str, password: str) -> tuple[Identity, str] | None:
     """Вход по email и паролю: проверяет пароль, выдаёт новый токен; возвращает (identity, token) или None."""
     identity = await get_identity_by_email(session, email)
-    if not identity or not check_password(password, identity.password_hash):
+    if not identity:
+        return None
+    if not await run_cpu(check_password, password, identity.password_hash):
         return None
     token = await issue_token_for_identity(session, identity)
     return identity, token

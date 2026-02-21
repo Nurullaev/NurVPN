@@ -40,34 +40,35 @@ async def backup_database() -> Exception | None:
     Returns:
         Optional[Exception]: Исключение в случае ошибки или None при успешном выполнении
     """
-    import asyncio
-    from core.executor import get_process_pool
+    from core.executor import run_io
 
-    loop = asyncio.get_event_loop()
-    pool = get_process_pool()
+    # Создаём бэкап в пуле потоков (run_io), а не процессов (run_cpu), чтобы файл
+    # создавался в том же процессе, что и отправка — иначе путь может быть недоступен
+    # (воркер уведомлений и воркер пула процессов могут иметь разный cwd/окружение).
     if BACKUP_CREATE_ARCHIVE:
         if not any([BACKUP_INCLUDE_DB, BACKUP_INCLUDE_CONFIG, BACKUP_INCLUDE_TEXTS, BACKUP_INCLUDE_IMG]):
-            backup_file_path, exception = await loop.run_in_executor(pool, _create_database_backup)
+            backup_file_path, exception = await run_io(_create_database_backup)
         else:
-            backup_file_path, exception = await loop.run_in_executor(pool, _create_backup_archive)
+            backup_file_path, exception = await run_io(_create_backup_archive)
     else:
-        backup_file_path, exception = await loop.run_in_executor(pool, _create_database_backup)
+        backup_file_path, exception = await run_io(_create_database_backup)
 
     if exception:
-        logger.error(f"Ошибка при создании бэкапа: {exception}")
+        logger.error("[Backup] Ошибка при создании: {}", exception)
         return exception
 
+    logger.info("[Backup] Файл создан: {}", backup_file_path)
     try:
         await _send_backup_to_admins(backup_file_path)
-        exception = _cleanup_old_backups()
+        exception = await run_io(_cleanup_old_backups)
 
         if exception:
-            logger.error(f"Ошибка при удалении старых бэкапов: {exception}")
+            logger.error("[Backup] Ошибка при очистке старых: {}", exception)
             return exception
 
         return None
     except Exception as e:
-        logger.error(f"Ошибка при отправке бэкапа: {e}")
+        logger.error("[Backup] Ошибка при отправке: {}", e)
         return e
 
 
@@ -108,13 +109,13 @@ def _create_database_backup() -> tuple[str | None, Exception | None]:
             capture_output=True,
             text=True,
         )
-        logger.info(f"Бэкап базы данных создан: {filename}")
+        logger.info("[Backup] БД создана: {}", filename)
         return str(filename), None
     except subprocess.CalledProcessError as e:
-        logger.error(f"Ошибка при выполнении pg_dump: {e.stderr}")
+        logger.error("[Backup] pg_dump: {}", e.stderr)
         return None, e
     except Exception as e:
-        logger.error(f"Непредвиденная ошибка при создании бэкапа: {e}")
+        logger.error("[Backup] Непредвиденная ошибка: {}", e)
         return None, e
     finally:
         if "PGPASSWORD" in os.environ:
@@ -143,26 +144,26 @@ def _create_backup_archive() -> tuple[str | None, Exception | None]:
             if BACKUP_INCLUDE_DB:
                 db_backup_path, db_exception = _create_database_backup()
                 if db_exception:
-                    logger.warning(f"Не удалось создать бекап БД для архива: {db_exception}")
+                    logger.warning("[Backup] БД для архива не создана: {}", db_exception)
                 elif db_backup_path and os.path.exists(db_backup_path):
                     tar.add(db_backup_path, arcname=f"{archive_folder}/database.sql")
-                    logger.info("База данных добавлена в архив")
+                    logger.info("[Backup] БД добавлена в архив")
 
             if BACKUP_INCLUDE_CONFIG:
                 config_path = project_root / "config.py"
                 if config_path.exists():
                     tar.add(config_path, arcname=f"{archive_folder}/config.py")
-                    logger.info("config.py добавлен в архив")
+                    logger.info("[Backup] config.py в архив")
                 else:
-                    logger.warning("config.py не найден, пропущен")
+                    logger.warning("[Backup] config.py не найден")
 
             if BACKUP_INCLUDE_TEXTS:
                 texts_path = project_root / "handlers" / "texts.py"
                 if texts_path.exists():
                     tar.add(texts_path, arcname=f"{archive_folder}/texts.py")
-                    logger.info("texts.py добавлен в архив")
+                    logger.info("[Backup] texts.py в архив")
                 else:
-                    logger.warning("handlers/texts.py не найден, пропущен")
+                    logger.warning("[Backup] handlers/texts.py не найден")
 
             if BACKUP_INCLUDE_IMG:
                 img_dir = project_root / "img"
@@ -170,23 +171,23 @@ def _create_backup_archive() -> tuple[str | None, Exception | None]:
                     img_files = [f for f in img_dir.iterdir() if f.is_file()]
                     for img_file in img_files:
                         tar.add(img_file, arcname=f"{archive_folder}/img/{img_file.name}")
-                    logger.info(f"Папка img/ добавлена в архив ({len(img_files)} файлов)")
+                    logger.info("[Backup] img/ в архив ({} файлов)", len(img_files))
                 else:
-                    logger.warning("Папка img/ не найдена, пропущена")
+                    logger.warning("[Backup] img/ не найдена")
 
-        logger.info(f"Архив бекапа создан: {archive_path}")
+        logger.info("[Backup] Архив создан: {}", archive_path)
 
         if db_backup_path and os.path.exists(db_backup_path) and db_backup_path != str(archive_path):
             try:
                 os.unlink(db_backup_path)
-                logger.info(f"Временный файл БД удален: {db_backup_path}")
+                logger.info("[Backup] Временный файл БД удалён: {}", db_backup_path)
             except Exception as e:
-                logger.warning(f"Не удалось удалить временный файл БД: {e}")
+                logger.warning("[Backup] Не удалось удалить временный файл БД: {}", e)
 
         return str(archive_path), None
 
     except Exception as e:
-        logger.error(f"Непредвиденная ошибка при создании архива бекапа: {e}")
+        logger.error("[Backup] Ошибка создания архива: {}", e)
         return None, e
 
 
@@ -209,19 +210,19 @@ def _cleanup_old_backups() -> Exception | None:
                 file_mtime = datetime.fromtimestamp(backup_file.stat().st_mtime)
                 if file_mtime < cutoff_date:
                     backup_file.unlink()
-                    logger.info(f"Удален старый бэкап: {backup_file}")
+                    logger.info("[Backup] Удалён старый: {}", backup_file)
 
         for archive_file in backup_dir.glob("*.tar.gz"):
             if archive_file.is_file():
                 file_mtime = datetime.fromtimestamp(archive_file.stat().st_mtime)
                 if file_mtime < cutoff_date:
                     archive_file.unlink()
-                    logger.info(f"Удален старый архив: {archive_file}")
+                    logger.info("[Backup] Удалён старый архив: {}", archive_file)
 
-        logger.info("Очистка старых бэкапов завершена")
+        logger.info("[Backup] Очистка старых завершена")
         return None
     except Exception as e:
-        logger.error(f"Ошибка при удалении старых бэкапов: {e}")
+        logger.error("[Backup] Ошибка при очистке: {}", e)
         return e
 
 
@@ -255,9 +256,9 @@ async def _send_backup_to_admins(backup_file_path: str) -> None:
         for admin_id in ADMIN_ID:
             try:
                 await bot.send_document(chat_id=admin_id, document=backup_input_file)
-                logger.info(f"Бэкап базы данных отправлен админу: {admin_id}")
+                logger.info("[Backup] Отправлено админу: {}", admin_id)
             except Exception as e:
-                logger.error(f"Не удалось отправить бэкап админу {admin_id}: {e}")
+                logger.error("[Backup] Не отправлено админу {}: {}", admin_id, e)
 
     try:
         async with aiofiles.open(backup_file_path, "rb") as backup_file:
@@ -267,12 +268,13 @@ async def _send_backup_to_admins(backup_file_path: str) -> None:
 
             if BACKUP_SEND_MODE == "default":
                 await send_default()
+                logger.info("[Backup] Отправлено всем админам")
 
             elif BACKUP_SEND_MODE == "channel":
                 channel_id = BACKUP_CHANNEL_ID.strip()
                 thread_id = BACKUP_CHANNEL_THREAD_ID.strip()
                 if not channel_id:
-                    logger.error("BACKUP_CHANNEL_ID не задан для режима 'channel', fallback на default")
+                    logger.error("[Backup] BACKUP_CHANNEL_ID не задан, fallback на default")
                     await send_default()
                     return
                 send_kwargs = {"chat_id": channel_id, "document": backup_input_file}
@@ -282,14 +284,14 @@ async def _send_backup_to_admins(backup_file_path: str) -> None:
                     send_kwargs["caption"] = BACKUP_CAPTION
                 try:
                     await bot.send_document(**send_kwargs)
-                    logger.info(f"Бэкап базы данных отправлен в канал: {channel_id} (топик: {thread_id})")
+                    logger.info("[Backup] Отправлено в канал: {} (топик: {})", channel_id, thread_id)
                 except Exception as e:
-                    logger.error(f"Не удалось отправить бэкап в канал {channel_id}: {e}, fallback на default")
+                    logger.error("[Backup] Не отправлено в канал {}: {}, fallback", channel_id, e)
                     await send_default()
 
             elif BACKUP_SEND_MODE == "bot":
                 if not BACKUP_OTHER_BOT_TOKEN:
-                    logger.error("BACKUP_OTHER_BOT_TOKEN не задан для режима 'bot', fallback на default")
+                    logger.error("[Backup] BACKUP_OTHER_BOT_TOKEN не задан, fallback")
                     await send_default()
                     return
                 other_bot = Bot(token=BACKUP_OTHER_BOT_TOKEN)
@@ -300,16 +302,16 @@ async def _send_backup_to_admins(backup_file_path: str) -> None:
                             if BACKUP_CAPTION:
                                 send_kwargs["caption"] = BACKUP_CAPTION
                             await other_bot.send_document(**send_kwargs)
-                            logger.info(f"Бэкап базы данных отправлен админу через другого бота: {admin_id}")
+                            logger.info("[Backup] Отправлено через другого бота админу: {}", admin_id)
                         except Exception as e:
-                            logger.error(f"Не удалось отправить бэкап админу {admin_id} через другого бота: {e}")
+                            logger.error("[Backup] Не отправлено админу {} через другого бота: {}", admin_id, e)
                     await other_bot.session.close()
                 except Exception as e:
-                    logger.error(f"Ошибка при отправке через другого бота: {e}, fallback на default")
+                    logger.error("[Backup] Ошибка через другого бота: {}, fallback", e)
                     await send_default()
             else:
-                logger.error(f"Неизвестный BACKUP_SEND_MODE: {BACKUP_SEND_MODE}, fallback на default")
+                logger.error("[Backup] Неизвестный BACKUP_SEND_MODE: {}, fallback", BACKUP_SEND_MODE)
                 await send_default()
     except Exception as e:
-        logger.error(f"Ошибка при отправке бэкапа: {e}")
+        logger.error("[Backup] Ошибка при отправке: {}", e)
         raise

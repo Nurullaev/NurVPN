@@ -11,11 +11,68 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
 from config import DB_NAME, DB_PASSWORD, DB_USER, PG_HOST, PG_PORT
+from core.executor import run_io
 from filters.admin import IsAdminFilter
 from logger import logger
 
 from . import router
 from .keyboard import AdminPanelCallback, build_back_to_db_menu, build_database_kb, build_export_db_sources_kb
+
+
+def sync_restore_database(
+    tmp_path: str,
+    db_name: str,
+    db_user: str,
+    db_password: str,
+    pg_host: str,
+    pg_port: str,
+) -> tuple[bool, str]:
+    """Восстановление БД из файла. Вызывать через run_io()."""
+    is_custom_dump = False
+    with open(tmp_path, "rb") as f:
+        if f.read(5) == b"PGDMP":
+            is_custom_dump = True
+
+    try:
+        subprocess.run(
+            [
+                "sudo", "-u", "postgres", "psql", "-d", "postgres",
+                "-c",
+                f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{db_name}' AND pid <> pg_backend_pid();",
+            ],
+            check=True,
+        )
+        subprocess.run(
+            ["sudo", "-u", "postgres", "psql", "-d", "postgres", "-c", f"DROP DATABASE IF EXISTS {db_name};"],
+            check=True,
+        )
+        subprocess.run(
+            ["sudo", "-u", "postgres", "psql", "-d", "postgres", "-c", f"CREATE DATABASE {db_name} OWNER {db_user};"],
+            check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        return False, (e.stderr or e.stdout or str(e))
+
+    os.environ["PGPASSWORD"] = db_password
+    try:
+        if is_custom_dump:
+            result = subprocess.run(
+                [
+                    "pg_restore", f"--dbname={db_name}", "-U", db_user,
+                    "-h", pg_host, "-p", pg_port, "--no-owner", "--exit-on-error", tmp_path,
+                ],
+                capture_output=True,
+                text=True,
+            )
+        else:
+            result = subprocess.run(
+                ["psql", "-U", db_user, "-h", pg_host, "-p", pg_port, "-d", db_name, "-f", tmp_path],
+                capture_output=True,
+                text=True,
+            )
+        return result.returncode == 0, result.stderr or ""
+    finally:
+        del os.environ["PGPASSWORD"]
 
 
 class DatabaseState(StatesGroup):
@@ -53,93 +110,31 @@ async def restore_database(message: Message, state: FSMContext, bot: Bot):
             tmp_path = tmp_file.name
 
         await bot.download(document, destination=tmp_path)
-        logger.info(f"[Restore] Файл получен и сохранён: {tmp_path}")
+        logger.info("[Restore] Файл получен: {}", tmp_path)
 
-        is_custom_dump = False
-        with open(tmp_path, "rb") as f:
-            signature = f.read(5)
-            if signature == b"PGDMP":
-                is_custom_dump = True
-
-        subprocess.run(
-            [
-                "sudo",
-                "-u",
-                "postgres",
-                "psql",
-                "-d",
-                "postgres",
-                "-c",
-                f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{DB_NAME}' AND pid <> pg_backend_pid();",
-            ],
-            check=True,
+        success, err_msg = await run_io(
+            sync_restore_database,
+            tmp_path,
+            DB_NAME,
+            DB_USER,
+            DB_PASSWORD,
+            PG_HOST,
+            PG_PORT,
         )
 
-        subprocess.run(
-            ["sudo", "-u", "postgres", "psql", "-d", "postgres", "-c", f"DROP DATABASE IF EXISTS {DB_NAME};"],
-            check=True,
-        )
-
-        subprocess.run(
-            ["sudo", "-u", "postgres", "psql", "-d", "postgres", "-c", f"CREATE DATABASE {DB_NAME} OWNER {DB_USER};"],
-            check=True,
-        )
-
-        logger.info("[Restore] База данных пересоздана")
-
-        os.environ["PGPASSWORD"] = DB_PASSWORD
-
-        if is_custom_dump:
-            result = subprocess.run(
-                [
-                    "pg_restore",
-                    f"--dbname={DB_NAME}",
-                    "-U",
-                    DB_USER,
-                    "-h",
-                    PG_HOST,
-                    "-p",
-                    PG_PORT,
-                    "--no-owner",
-                    "--exit-on-error",
-                    tmp_path,
-                ],
-                capture_output=True,
-                text=True,
-            )
-        else:
-            result = subprocess.run(
-                [
-                    "psql",
-                    "-U",
-                    DB_USER,
-                    "-h",
-                    PG_HOST,
-                    "-p",
-                    PG_PORT,
-                    "-d",
-                    DB_NAME,
-                    "-f",
-                    tmp_path,
-                ],
-                capture_output=True,
-                text=True,
-            )
-
-        del os.environ["PGPASSWORD"]
-
-        if result.returncode != 0:
-            logger.error(f"[Restore] Ошибка восстановления: {result.stderr}")
+        if not success:
+            logger.error("[Restore] Ошибка: {}", err_msg)
             await message.answer(
-                f"❌ Ошибка при восстановлении базы данных:\n<pre>{result.stderr}</pre>",
+                f"❌ Ошибка при восстановлении базы данных:\n<pre>{err_msg}</pre>",
             )
             return
 
+        logger.info("[Restore] База восстановлена")
         await message.answer(
             "✅ База данных восстановлена.",
             reply_markup=build_back_to_db_menu(),
         )
-        logger.info("[Restore] Успешно восстановлено. Завершаем процесс для перезапуска.")
+        logger.info("[Restore] Завершение для перезапуска")
         await state.clear()
         sys.exit(0)
 

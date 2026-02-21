@@ -10,7 +10,7 @@ from ping3 import ping
 
 from bot import bot
 from config import ADMIN_ID, PING_TIME
-from core.executor import get_thread_pool
+from core.executor import run_io
 from database import async_session_maker, get_servers
 from handlers.admin.servers.keyboard import AdminServerCallback
 from logger import logger
@@ -30,11 +30,7 @@ def _sync_ping(server_ip: str, timeout: float = 3):
 async def ping_server(server_ip: str) -> bool:
     async with PING_SEMAPHORE:
         try:
-            loop = asyncio.get_running_loop()
-            response = await loop.run_in_executor(
-                get_thread_pool(),
-                lambda: _sync_ping(server_ip, 3),
-            )
+            response = await run_io(_sync_ping, server_ip, 3)
             if response is not None and response is not False:
                 return True
             return await check_tcp_connection(server_ip, 443)
