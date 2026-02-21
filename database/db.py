@@ -4,12 +4,16 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import declarative_base
 
-from config import DATABASE_URL, DB_MAX_OVERFLOW, DB_POOL_SIZE
+from config import DATABASE_URL, DB_MAX_OVERFLOW, DB_POOL_SIZE, USE_PGBOUNCER
 from core.cache_config import UPDATE_STALE_AGE_SEC
 
 
 CONCURRENT_UPDATES_LIMIT = DB_POOL_SIZE + DB_MAX_OVERFLOW
 MAX_UPDATE_AGE_SEC = UPDATE_STALE_AGE_SEC
+
+_connect_args = {}
+if USE_PGBOUNCER and "+asyncpg" in DATABASE_URL:
+    _connect_args["statement_cache_size"] = 0
 
 engine = create_async_engine(
     DATABASE_URL,
@@ -20,6 +24,7 @@ engine = create_async_engine(
     pool_timeout=60,
     pool_pre_ping=True,
     pool_recycle=300,
+    connect_args=_connect_args,
 )
 
 async_session_maker = async_sessionmaker(

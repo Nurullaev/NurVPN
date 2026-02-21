@@ -12,6 +12,8 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import USERNAME_BOT
+from core.cache_config import START_UTM_EXISTS_TTL_SEC
+from core.redis_cache import cache_key, cache_delete, cache_set
 from database import create_tracking_source, get_tracking_source_stats
 from database.models import TrackingSource, User
 from filters.admin import IsAdminFilter
@@ -83,6 +85,7 @@ async def handle_ads_code_input(message: Message, state: FSMContext, session: As
             created_by=message.from_user.id,
             session=session,
         )
+        await cache_set(cache_key("utm_exists", code_with_prefix), True, START_UTM_EXISTS_TTL_SEC)
         stats = await get_tracking_source_stats(session, code_with_prefix)
         if not stats:
             await message.answer("❌ Источник не найден или не содержит данных.")
@@ -159,6 +162,7 @@ async def handle_ads_delete(
         await session.execute(update(User).where(User.source_code == code).values(source_code=None))
         await session.execute(delete(TrackingSource).where(TrackingSource.code == code))
         await session.commit()
+        await cache_delete(cache_key("utm_exists", code))
         await callback_query.message.edit_text(
             f"🗑️ Ссылка <code>{code}</code> удалена.",
             reply_markup=build_ads_kb(),

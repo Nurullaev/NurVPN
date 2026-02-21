@@ -263,11 +263,13 @@ async def prompt_subscription(callback: CallbackQuery):
 
 
 async def handle_utm_link(utm_code: str, message: Message, state: FSMContext, session: AsyncSession, user_data: dict):
-    is_known = await cache_get(cache_key("utm_exists", utm_code))
+    key = cache_key("utm_exists", utm_code)
+    is_known = await cache_get(key)
     if is_known is None:
-        res = await session.execute(select(TrackingSource).where(TrackingSource.code == utm_code))
+        stmt = select(1).select_from(TrackingSource).where(TrackingSource.code == utm_code).limit(1)
+        res = await session.execute(stmt)
         is_known = res.scalar_one_or_none() is not None
-        await cache_set(cache_key("utm_exists", utm_code), bool(is_known), START_UTM_EXISTS_TTL_SEC)
+        await cache_set(key, bool(is_known), START_UTM_EXISTS_TTL_SEC)
 
     if not is_known:
         await message.answer("❌ UTM ссылка не найдена.")
