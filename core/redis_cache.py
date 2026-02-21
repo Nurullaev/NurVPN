@@ -1,8 +1,9 @@
 import json
-import os
 import time
 from importlib import import_module
 from typing import Any
+
+from config import REDIS_URL
 
 _REDIS_CLIENT = None
 _REDIS_UNAVAILABLE_UNTIL = 0.0
@@ -22,9 +23,8 @@ async def _get_redis() -> Any | None:
         return None
 
     try:
-        redis_url = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
         redis_from_url = import_module("redis.asyncio").from_url
-        client = redis_from_url(redis_url, encoding="utf-8", decode_responses=True)
+        client = redis_from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
         await client.ping()
         _REDIS_CLIENT = client
         return _REDIS_CLIENT
