@@ -10,6 +10,8 @@ services:
     environment:
       REDIS_URL: redis://127.0.0.1:6379/0
       BACK_DIR: /app/backups
+      # При наплывах: 2–4 воркера распределяют /start и остальные обновления по ядрам (LB на 3001).
+      # BOT_WORKERS: 2
     volumes:
       - /:/host:ro
       - backups_data:/app/backups

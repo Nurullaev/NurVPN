@@ -23,6 +23,10 @@ RUN rm -rf /app/venv \
 RUN adduser --disabled-password --gecos "" appuser \
     && mkdir -p /app/backups \
     && chown -R appuser:appuser /app
+
+RUN chmod +x /app/scripts/entrypoint.sh
+
 USER appuser
 
-CMD ["/app/venv/bin/python", "main.py"]
+ENV PYTHON=/app/venv/bin/python
+ENTRYPOINT ["/app/scripts/entrypoint.sh"]

@@ -46,6 +46,7 @@ from handlers.texts import (
 )
 from handlers.utils import edit_or_send_message, format_discount_time_left, get_russian_month
 from hooks.hook_buttons import insert_hook_buttons
+from middlewares.session import release_session_early
 from hooks.processors import (
     process_process_callback_renew_key,
     process_purchase_tariff_group_override,
@@ -825,7 +826,7 @@ async def complete_key_renewal(
             logger.error(f"[Error] Кластер для {server_or_cluster} не найден.")
             return
 
-        await session.release_early()
+        await release_session_early(session)
         await renew_key_in_cluster(
             cluster_id=cluster_id,
             email=email,
