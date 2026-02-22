@@ -230,7 +230,7 @@ async def build_keys_response(records: list[Key] | None, session: AsyncSession, 
 async def handle_rename_key(callback: CallbackQuery, state: FSMContext):
     client_id = callback.data.split("|")[1]
     await state.set_state(RenameKeyState.waiting_for_new_alias)
-    await state.update_data(client_id=client_id, target_message=callback.message)
+    await state.update_data(client_id=client_id)
 
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text=BACK, callback_data="cancel_and_back_to_view_keys"))
