@@ -291,6 +291,25 @@ async def render_user_config_screen(
     tariff_id = data.get("config_tariff_id")
     cfg = data.get("tariff_config") or {}
 
+    if tariff_id is None and callback_query.data:
+        parts = callback_query.data.split("|")
+        if len(parts) >= 2 and (callback_query.data.startswith("cfg_user_devices|") or callback_query.data.startswith("cfg_user_traffic|")):
+            try:
+                tariff_id = int(parts[1])
+                await state.update_data(config_tariff_id=tariff_id)
+            except (ValueError, IndexError):
+                pass
+
+    if tariff_id is None:
+        await edit_or_send_message(
+            target_message=callback_query.message,
+            text="Подождите, создаём подписку…",
+            reply_markup=None,
+        )
+        await state.clear()
+        logger.warning("[TARIFF_CFG] render_user_config_screen: config_tariff_id missing in state")
+        return
+
     tariff = await get_tariff_by_id(session, int(tariff_id))
     if not tariff:
         await edit_or_send_message(
@@ -604,11 +623,21 @@ async def finalize_config_and_purchase(callback_query: CallbackQuery, state: FSM
     tariff_id = data.get("config_tariff_id")
     cfg = data.get("tariff_config") or {}
 
+    if tariff_id is None:
+        await edit_or_send_message(
+            target_message=callback_query.message,
+            text="Подождите, создаём подписку…",
+            reply_markup=None,
+        )
+        await state.clear()
+        logger.warning("[TARIFF_CFG] finalize_config_and_purchase: config_tariff_id missing in state")
+        return
+
     tariff = await get_tariff_by_id(session, int(tariff_id))
     if not tariff:
         await edit_or_send_message(
             target_message=callback_query.message,
-            text="❌ Тариф не найден.",
+            text="Подождите, создаём подписку…",
             reply_markup=None,
         )
         await state.clear()
@@ -841,7 +870,10 @@ async def handle_user_devices_choice(callback: CallbackQuery, state: FSMContext,
     _, _tariff_id_str, devices_str = callback.data.split("|", 2)
     devices = int(devices_str)
 
-    current = (await state.get_data()).get("config_selected_device_limit")
+    data = await state.get_data()
+    if data.get("config_tariff_id") is None:
+        await state.update_data(config_tariff_id=int(_tariff_id_str))
+    current = data.get("config_selected_device_limit")
     if current is not None and int(current) == devices:
         await callback.answer()
         return
@@ -859,7 +891,10 @@ async def handle_user_traffic_choice(callback: CallbackQuery, state: FSMContext,
     _, _tariff_id_str, traffic_str = callback.data.split("|", 2)
     traffic = int(traffic_str)
 
-    current = (await state.get_data()).get("config_selected_traffic_gb")
+    data = await state.get_data()
+    if data.get("config_tariff_id") is None:
+        await state.update_data(config_tariff_id=int(_tariff_id_str))
+    current = data.get("config_selected_traffic_gb")
     if current is not None and int(current) == traffic:
         await callback.answer()
         return

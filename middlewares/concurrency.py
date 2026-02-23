@@ -4,6 +4,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from aiogram import BaseMiddleware, Bot
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery, Message, TelegramObject
 
 from core.cache_config import (
@@ -42,6 +43,12 @@ class ConcurrencyLimiterMiddleware(BaseMiddleware):
                         show_alert=False,
                     )
                     data["callback_answered_by_concurrency"] = True
+                except TelegramBadRequest as e:
+                    msg = str(e).lower()
+                    if "query is too old" in msg or "response timeout expired" in msg or "query id is invalid" in msg:
+                        pass
+                    else:
+                        raise
                 except Exception:
                     pass
 

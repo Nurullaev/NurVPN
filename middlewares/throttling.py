@@ -1,4 +1,5 @@
 from aiogram import BaseMiddleware, Bot
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery
 
 from core.cache_config import (
@@ -31,11 +32,18 @@ class ThrottlingMiddleware(BaseMiddleware):
             notice_key = cache_key("throttle_notice", user_id, key_hash)
             if await cache_setnx(notice_key, 1, self._notice_ttl):
                 bot: Bot = data["bot"]
-                await bot.answer_callback_query(
-                    callback_query_id=event.id,
-                    text="Слишком много нажатий, подождите...",
-                    show_alert=False,
-                )
+                try:
+                    await bot.answer_callback_query(
+                        callback_query_id=event.id,
+                        text="Слишком много нажатий, подождите...",
+                        show_alert=False,
+                    )
+                except TelegramBadRequest as e:
+                    msg = str(e).lower()
+                    if "query is too old" in msg or "response timeout expired" in msg or "query id is invalid" in msg:
+                        pass
+                    else:
+                        raise
             return
 
         return await handler(event, data)
