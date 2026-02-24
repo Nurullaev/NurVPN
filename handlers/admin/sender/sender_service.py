@@ -1,6 +1,7 @@
 import asyncio
 import time
 
+from collections.abc import Awaitable, Callable
 from collections import deque
 from typing import Any
 
@@ -183,7 +184,32 @@ class BroadcastService:
             if self._session is not None:
                 await self._session.rollback()
 
-    async def broadcast(self, messages: list[dict], workers: int = 20) -> dict:
+    async def _progress_loop(
+        self,
+        total: int,
+        on_progress: Callable[[int, int, int, int], Awaitable[None]],
+        interval: float,
+    ) -> None:
+        """Периодически вызывает on_progress(completed, total, sent, failed)."""
+        while self.is_running:
+            await asyncio.sleep(interval)
+            if not self.is_running:
+                break
+            completed = len(self.results)
+            sent = self.total_sent
+            failed = completed - sent
+            try:
+                await on_progress(completed, total, sent, failed)
+            except Exception as e:
+                logger.debug(f"[Broadcast] Ошибка обновления прогресса: {e}")
+
+    async def broadcast(
+        self,
+        messages: list[dict],
+        workers: int = 20,
+        on_progress: Callable[[int, int, int, int], Awaitable[None]] | None = None,
+        progress_interval: float = 2.0,
+    ) -> dict:
         self.is_running = True
         self.start_time = time.time()
         self.results = []
@@ -201,6 +227,13 @@ class BroadcastService:
 
         logger.info(f"📤 Начата рассылка на {len(messages)} пользователей с {workers} воркерами")
 
+        total = len(messages)
+        progress_task = None
+        if on_progress and total > 0:
+            progress_task = asyncio.create_task(
+                self._progress_loop(total, on_progress, progress_interval),
+            )
+
         worker_tasks = [asyncio.create_task(self._worker()) for _ in range(workers)]
 
         delayed_task = asyncio.create_task(self._process_delayed_messages())
@@ -212,6 +245,23 @@ class BroadcastService:
             await asyncio.sleep(1)
 
         self.is_running = False
+
+        if progress_task is not None:
+            progress_task.cancel()
+            try:
+                await progress_task
+            except asyncio.CancelledError:
+                pass
+            completed = len(self.results)
+            try:
+                await on_progress(
+                    completed,
+                    total,
+                    self.total_sent,
+                    completed - self.total_sent,
+                )
+            except Exception as e:
+                logger.debug(f"[Broadcast] Финальное обновление прогресса: {e}")
 
         for task in worker_tasks:
             task.cancel()

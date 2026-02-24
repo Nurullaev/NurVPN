@@ -17,7 +17,7 @@ from aiogram.exceptions import (
 from aiogram.types import BufferedInputFile, InlineKeyboardMarkup
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import create_blocked_user
+from database import async_session_maker, create_blocked_user
 from handlers.tariffs.tariff_display import get_key_tariff_display
 from handlers.utils import format_hours, format_minutes, get_russian_month
 from logger import logger
@@ -147,7 +147,7 @@ class FastNotificationSender:
                 await asyncio.sleep(0.1)
 
     async def _save_blocked_users(self):
-        if not self.blocked_users or not self.session:
+        if not self.blocked_users:
             return
         try:
             from sqlalchemy.dialects.postgresql import insert
@@ -155,12 +155,12 @@ class FastNotificationSender:
 
             values = [{"tg_id": tg_id} for tg_id in self.blocked_users]
             stmt = insert(BlockedUser).values(values).on_conflict_do_nothing(index_elements=[BlockedUser.tg_id])
-            await self.session.execute(stmt)
-            await self.session.commit()
+            async with async_session_maker() as session:
+                await session.execute(stmt)
+                await session.commit()
             logger.info(f"📝 Добавлено {len(self.blocked_users)} пользователей в blocked_users")
         except Exception as e:
             logger.error(f"❌ Ошибка при сохранении заблокированных пользователей: {e}")
-            await self.session.rollback()
 
     async def send_all(self, messages: list[dict], workers: int = 15) -> list[bool]:
         if not messages:

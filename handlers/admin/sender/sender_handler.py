@@ -16,6 +16,22 @@ from .sender_states import AdminSender
 from .sender_utils import get_recipients, parse_message_buttons
 
 
+def _broadcast_progress_text(completed: int, total: int, sent: int, failed: int) -> str:
+    """Формирует текст статус-бара рассылки."""
+    if total <= 0:
+        pct = 0
+        bar_filled = 0
+    else:
+        pct = min(100, int(100 * completed / total))
+        bar_filled = min(10, int(10 * completed / total))
+    bar = "█" * bar_filled + "░" * (10 - bar_filled)
+    return (
+        f"📤 <b>Рассылка...</b>\n\n"
+        f"[{bar}] <b>{pct}%</b> ({completed}/{total})\n"
+        f"✅ {sent}   ❌ {failed}"
+    )
+
+
 router = Router()
 
 
@@ -170,16 +186,39 @@ async def handle_broadcast_confirm(callback_query: CallbackQuery, state: FSMCont
         await state.clear()
         return
 
-    await callback_query.message.edit_text(f"📤 <b>Рассылка начата!</b>\n👥 Количество получателей: {total_users}")
+    status_message = callback_query.message
+    total_users_for_bar = len(tg_ids)
+    await status_message.edit_text(
+        _broadcast_progress_text(0, total_users_for_bar, 0, 0),
+    )
 
     messages = []
     for tg_id in tg_ids:
         message_data = {"tg_id": tg_id, "text": text_message, "photo": photo, "keyboard": keyboard}
         messages.append(message_data)
 
-    broadcast_service = BroadcastService(bot=callback_query.bot, session=session, messages_per_second=35)
+    bot = callback_query.bot
 
-    stats = await broadcast_service.broadcast(messages, workers=5)
+    async def on_progress(completed: int, total: int, sent: int, failed: int) -> None:
+        text = _broadcast_progress_text(completed, total, sent, failed)
+        try:
+            await bot.edit_message_text(
+                chat_id=status_message.chat.id,
+                message_id=status_message.message_id,
+                text=text,
+            )
+        except TelegramBadRequest as e:
+            if "message is not modified" not in str(e).lower():
+                logger.debug(f"[Sender] Обновление прогресса: {e}")
+
+    broadcast_service = BroadcastService(bot=bot, session=session, messages_per_second=35)
+
+    stats = await broadcast_service.broadcast(
+        messages,
+        workers=5,
+        on_progress=on_progress,
+        progress_interval=2.0,
+    )
 
     duration_minutes = int(stats["total_duration"] // 60)
     duration_seconds = int(stats["total_duration"] % 60)
