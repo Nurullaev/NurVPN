@@ -135,5 +135,6 @@ class BanCheckerMiddleware(BaseMiddleware):
         if isinstance(obj, Message):
             await obj.answer(text_html, parse_mode="HTML")
         elif isinstance(obj, CallbackQuery):
-            await obj.answer(text_plain, show_alert=True)
+            alert_text = text_plain if len(text_plain) <= 200 else text_plain[:197] + "..."
+            await obj.answer(alert_text, show_alert=True)
         return
