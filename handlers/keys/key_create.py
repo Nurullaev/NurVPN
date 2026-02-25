@@ -53,6 +53,14 @@ router = Router()
 moscow_tz = pytz.timezone("Europe/Moscow")
 
 
+def _make_state_safe(data: dict) -> dict:
+    safe = dict(data)
+    for key, value in safe.items():
+        if isinstance(value, datetime):
+            safe[key] = value.isoformat()
+    return safe
+
+
 class Form(FSMContext):
     waiting_for_server_selection = "waiting_for_server_selection"
 
@@ -162,7 +170,7 @@ async def handle_key_creation(
 
                 if discount_info and discount_info.get("available"):
                     group_code = discount_info["tariff_group"]
-                    await state.update_data(discount_info=discount_info)
+                    await state.update_data(discount_info=_make_state_safe(discount_info))
                 else:
                     await state.update_data(discount_info=None)
 
@@ -176,7 +184,7 @@ async def handle_key_creation(
                     group_code = override_result["override_group"]
                     logger.info(f"[PURCHASE] Тарифная группа переопределена хуком: {group_code}")
                     if override_result.get("discount_info"):
-                        await state.update_data(discount_info=override_result["discount_info"])
+                        await state.update_data(discount_info=_make_state_safe(override_result["discount_info"]))
 
                 tariffs_data = await get_tariffs(
                     session,
