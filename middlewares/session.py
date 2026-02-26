@@ -115,6 +115,10 @@ class SessionMiddleware(BaseMiddleware):
         t0 = time.perf_counter() if LOG_SESSION_DURATION else None
 
         async with self.sessionmaker() as session:
+            try:
+                await session.rollback()
+            except Exception:
+                pass
             proxy = _SessionProxy(session, self.sessionmaker, data)
             data["session"] = proxy
             committed = False
@@ -160,7 +164,7 @@ class SessionMiddleware(BaseMiddleware):
                 rolled_back = True
                 raise
             finally:
-                if not committed and not rolled_back and not data.get("_session_released_early"):
+                if not committed and not data.get("_session_released_early"):
                     try:
                         await session.rollback()
                     except Exception:

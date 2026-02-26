@@ -21,6 +21,7 @@ from handlers.texts import (
     SUBSCRIPTION_UNFROZEN_MSG,
     UNFREEZE_SUBSCRIPTION_CONFIRM_MSG,
 )
+from handlers.keys.utils import key_owned_by_user
 from handlers.utils import edit_or_send_message, handle_error
 from middlewares.session import release_session_early
 from logger import logger
@@ -32,6 +33,10 @@ router = Router()
 @router.callback_query(F.data.startswith("unfreeze_subscription|"))
 async def process_callback_unfreeze_subscription(callback_query: CallbackQuery, session: Any):
     key_name = callback_query.data.split("|")[1]
+    record = await get_key_details(session, key_name)
+    if not key_owned_by_user(record, callback_query.from_user.id):
+        await callback_query.answer("Доступ запрещён.", show_alert=True)
+        return
     confirm_text = UNFREEZE_SUBSCRIPTION_CONFIRM_MSG
 
     builder = InlineKeyboardBuilder()
@@ -65,6 +70,9 @@ async def process_callback_unfreeze_subscription_confirm(callback_query: Callbac
         record = await get_key_details(session, key_name)
         if not record:
             await callback_query.message.answer("Ключ не найден.")
+            return
+        if not key_owned_by_user(record, callback_query.from_user.id):
+            await callback_query.answer("Доступ запрещён.", show_alert=True)
             return
 
         email = record["email"]
@@ -137,6 +145,10 @@ async def process_callback_freeze_subscription(callback_query: CallbackQuery, se
     Показывает пользователю диалог подтверждения заморозки (отключения) подписки.
     """
     key_name = callback_query.data.split("|")[1]
+    record = await get_key_details(session, key_name)
+    if not key_owned_by_user(record, callback_query.from_user.id):
+        await callback_query.answer("Доступ запрещён.", show_alert=True)
+        return
 
     confirm_text = FREEZE_SUBSCRIPTION_CONFIRM_MSG
 
@@ -171,6 +183,9 @@ async def process_callback_freeze_subscription_confirm(callback_query: CallbackQ
         record = await get_key_details(session, key_name)
         if not record:
             await callback_query.message.answer("Ключ не найден.")
+            return
+        if not key_owned_by_user(record, callback_query.from_user.id):
+            await callback_query.answer("Доступ запрещён.", show_alert=True)
             return
 
         email = record["email"]

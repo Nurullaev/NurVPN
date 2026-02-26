@@ -110,6 +110,30 @@ async def get_last_notification_time(session: AsyncSession, tg_id: int, notifica
     return None
 
 
+async def get_last_notification_times_bulk(
+    session: AsyncSession, pairs: list[tuple[int, str]]
+) -> dict[tuple[int, str], int]:
+    """
+    Один запрос: последние времена уведомлений для списка (tg_id, notification_type).
+    Возвращает dict[(tg_id, notification_type)] -> timestamp_ms.
+    """
+    if not pairs:
+        return {}
+    from sqlalchemy import tuple_
+
+    stmt = select(
+        Notification.tg_id,
+        Notification.notification_type,
+        Notification.last_notification_time,
+    ).where(tuple_(Notification.tg_id, Notification.notification_type).in_(pairs))
+    result = await session.execute(stmt)
+    out = {}
+    for tg_id, ntype, last_time in result.all():
+        if last_time:
+            out[(tg_id, ntype)] = int(last_time.timestamp() * 1000)
+    return out
+
+
 async def check_hot_lead_discount(session: AsyncSession, tg_id: int) -> dict:
     try:
         result = await session.execute(

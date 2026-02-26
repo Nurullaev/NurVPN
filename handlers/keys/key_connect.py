@@ -19,7 +19,7 @@ from config import (
     DOWNLOAD_IOS,
     INSTRUCTIONS_BUTTON,
 )
-from database import Key, get_subscription_link
+from database import Key, get_key_details, get_subscription_link
 from handlers.buttons import (
     ANDROID,
     BACK,
@@ -39,6 +39,7 @@ from handlers.texts import (
     IOS_DESCRIPTION_TEMPLATE,
     SUBSCRIPTION_DESCRIPTION,
 )
+from handlers.keys.utils import key_owned_by_user
 from handlers.utils import edit_or_send_message
 from hooks.hook_buttons import insert_hook_buttons
 from hooks.processors import process_connect_device_menu
@@ -67,6 +68,10 @@ def generate_key_qr_file(qr_data: str, email: str) -> str:
 async def handle_connect_device(callback_query: CallbackQuery, session: AsyncSession):
     try:
         key_name = callback_query.data.split("|")[1]
+        record = await get_key_details(session, key_name)
+        if not key_owned_by_user(record, callback_query.from_user.id):
+            await callback_query.answer("Доступ запрещён.", show_alert=True)
+            return
 
         builder = InlineKeyboardBuilder()
         builder.row(InlineKeyboardButton(text=IPHONE, callback_data=f"connect_ios|{key_name}"))
@@ -102,6 +107,10 @@ async def process_callback_connect_phone(callback_query: CallbackQuery, session:
     email = callback_query.data.split("|")[1]
 
     try:
+        record = await get_key_details(session, email)
+        if not key_owned_by_user(record, callback_query.from_user.id):
+            await callback_query.answer("Доступ запрещён.", show_alert=True)
+            return
         key_link = await get_subscription_link(session, email)
         if not key_link:
             await callback_query.message.answer("❌ Ошибка: ключ не найден.")
@@ -148,6 +157,10 @@ async def process_callback_connect_ios(callback_query: CallbackQuery, session: A
     email = callback_query.data.split("|")[1]
 
     try:
+        record = await get_key_details(session, email)
+        if not key_owned_by_user(record, callback_query.from_user.id):
+            await callback_query.answer("Доступ запрещён.", show_alert=True)
+            return
         key_link = await get_subscription_link(session, email)
         if not key_link:
             await callback_query.message.answer("❌ Ошибка: ключ не найден.")
@@ -188,6 +201,10 @@ async def process_callback_connect_android(callback_query: CallbackQuery, sessio
     email = callback_query.data.split("|")[1]
 
     try:
+        record = await get_key_details(session, email)
+        if not key_owned_by_user(record, callback_query.from_user.id):
+            await callback_query.answer("Доступ запрещён.", show_alert=True)
+            return
         key_link = await get_subscription_link(session, email)
         if not key_link:
             await callback_query.message.answer("❌ Ошибка: ключ не найден.")
@@ -234,6 +251,9 @@ async def show_qr_code(callback_query: types.CallbackQuery, session: AsyncSessio
 
         if not record:
             await callback_query.message.answer("❌ Подписка не найдена.")
+            return
+        if record.tg_id != callback_query.from_user.id:
+            await callback_query.answer("Доступ запрещён.", show_alert=True)
             return
 
         qr_data = record.key or record.remnawave_link

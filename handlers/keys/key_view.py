@@ -62,6 +62,7 @@ from handlers.texts import (
     RENAME_KEY_PROMPT,
     key_message,
 )
+from handlers.keys.utils import key_owned_by_user
 from handlers.utils import (
     edit_or_send_message,
     format_days,
@@ -227,8 +228,12 @@ async def build_keys_response(records: list[Key] | None, session: AsyncSession, 
 
 
 @router.callback_query(F.data.startswith("rename_key|"))
-async def handle_rename_key(callback: CallbackQuery, state: FSMContext):
+async def handle_rename_key(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
     client_id = callback.data.split("|")[1]
+    key_row = (await session.execute(select(Key).where(Key.client_id == client_id))).scalar_one_or_none()
+    if not key_row or key_row.tg_id != callback.from_user.id:
+        await callback.answer("Доступ запрещён.", show_alert=True)
+        return
     await state.set_state(RenameKeyState.waiting_for_new_alias)
     await state.update_data(client_id=client_id)
 
@@ -282,6 +287,10 @@ async def handle_new_alias_input(message: Message, state: FSMContext, session: A
 @router.callback_query(F.data.startswith("view_key|"))
 async def process_callback_view_key(callback_query: CallbackQuery, session: AsyncSession):
     key_name = callback_query.data.split("|")[1]
+    record = await get_key_details(session, key_name)
+    if not key_owned_by_user(record, callback_query.from_user.id):
+        await callback_query.answer("Доступ запрещён.", show_alert=True)
+        return
     image_path = os.path.join("img", "pic_view.jpg")
     await render_key_info(callback_query.message, session, key_name, image_path)
 
@@ -481,6 +490,9 @@ async def handle_reset_hwid(callback_query: CallbackQuery, session: AsyncSession
     record = await get_key_details(session, key_name)
     if not record:
         await callback_query.answer("❌ Ключ не найден.", show_alert=True)
+        return
+    if not key_owned_by_user(record, callback_query.from_user.id):
+        await callback_query.answer("Доступ запрещён.", show_alert=True)
         return
 
     client_id = record.get("client_id")

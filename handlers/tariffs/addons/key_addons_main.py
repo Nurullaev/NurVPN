@@ -318,6 +318,9 @@ async def start_key_addons(callback: CallbackQuery, state: FSMContext, session: 
         logger.warning(f"[ADDONS] Подписка {email} не найдена")
         await callback.message.answer("❌ Подписка не найдена.")
         return
+    if record.get("tg_id") != callback.from_user.id:
+        await callback.answer("Доступ запрещён.", show_alert=True)
+        return
 
     tariff_id = record.get("tariff_id")
     if not tariff_id:

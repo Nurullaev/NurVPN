@@ -15,7 +15,9 @@ from config import (
     TRIAL_TIME_DISABLE,
 )
 from core.bootstrap import BUTTONS_CONFIG, MODES_CONFIG
-from database import get_balance, get_key_count, get_trial
+from core.cache_config import BALANCE_CACHE_TTL_SEC, KEY_COUNT_CACHE_TTL_SEC, PROFILE_DATA_CACHE_TTL_SEC
+from core.redis_cache import cache_get, cache_key, cache_set
+from database import get_balance_trial_key_count
 from handlers.buttons import (
     ABOUT_VPN,
     ADD_SUB,
@@ -33,6 +35,7 @@ from handlers.payments.currency_rates import format_for_user
 from handlers.texts import ADD_SUBSCRIPTION_HINT
 from hooks.hook_buttons import insert_hook_buttons
 from hooks.hooks import run_hooks
+from middlewares.session import release_session_early
 
 from .admin.panel.keyboard import AdminPanelCallback
 from .texts import profile_message_send
@@ -62,10 +65,21 @@ async def process_callback_view_profile(
     chat_id = chat.id
     username = get_username(user or chat)
 
-    key_count = await get_key_count(session, chat_id)
-    balance_rub = await get_balance(session, chat_id)
-    trial_status = await get_trial(session, chat_id)
-    balance_rub = balance_rub or 0
+    cached = await cache_get(cache_key("profile_data", chat_id))
+    if isinstance(cached, dict) and "key_count" in cached and "balance_rub" in cached and "trial_status" in cached:
+        key_count = int(cached["key_count"])
+        balance_rub = float(cached.get("balance_rub") or 0)
+        trial_status = int(cached.get("trial_status") or 0)
+    else:
+        balance_rub, trial_status, key_count = await get_balance_trial_key_count(session, chat_id)
+        balance_rub = balance_rub or 0
+        await cache_set(cache_key("balance", chat_id), balance_rub, BALANCE_CACHE_TTL_SEC)
+        await cache_set(cache_key("key_count", chat_id), key_count, KEY_COUNT_CACHE_TTL_SEC)
+        await cache_set(
+            cache_key("profile_data", chat_id),
+            {"key_count": key_count, "balance_rub": balance_rub, "trial_status": trial_status},
+            PROFILE_DATA_CACHE_TTL_SEC,
+        )
 
     balance_text = await format_for_user(
         session,
@@ -134,6 +148,7 @@ async def process_callback_view_profile(
     else:
         builder.row(InlineKeyboardButton(text=BACK, callback_data="start"))
 
+    await release_session_early(session)
     await edit_or_send_message(
         target_message=message,
         text=profile_message,

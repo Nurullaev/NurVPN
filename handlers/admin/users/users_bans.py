@@ -11,6 +11,7 @@ from handlers.buttons import BACK
 
 from database.models import ManualBan
 from filters.admin import IsAdminFilter
+from middlewares.ban_checker import invalidate_ban_cache
 
 from .keyboard import AdminUserEditorCallback, build_editor_btn, build_editor_kb, build_user_ban_type_kb
 from .users_states import BanUserStates
@@ -81,6 +82,7 @@ async def handle_ban_forever_reason_input(message: Message, state: FSMContext, s
 
     await session.execute(stmt)
     await session.commit()
+    await invalidate_ban_cache(tg_id)
     await state.clear()
 
     await message.answer(
@@ -161,6 +163,7 @@ async def handle_ban_duration_input(message: Message, state: FSMContext, session
 
         await session.execute(stmt)
         await session.commit()
+        await invalidate_ban_cache(tg_id)
 
         text = (
             f"✅ Пользователь <code>{tg_id}</code> временно забанен до <b>{until:%Y-%m-%d %H:%M}</b> по UTC."
@@ -200,6 +203,7 @@ async def handle_ban_shadow(callback: CallbackQuery, callback_data: AdminUserEdi
     )
     await session.execute(stmt)
     await session.commit()
+    await invalidate_ban_cache(callback_data.tg_id)
 
     await callback.message.edit_text(
         text=f"👻 Пользователь <code>{callback_data.tg_id}</code> получил теневой бан.",
@@ -218,6 +222,7 @@ async def handle_user_unban(
 ):
     await session.execute(delete(ManualBan).where(ManualBan.tg_id == callback_data.tg_id))
     await session.commit()
+    await invalidate_ban_cache(callback_data.tg_id)
 
     text = (
         f"✅ Пользователь <code>{callback_data.tg_id}</code> разблокирован. Нажмите кнопку ниже для возврата в профиль."

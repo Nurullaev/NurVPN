@@ -20,7 +20,7 @@ from config import (
     KASSAI_SUCCESS_URL,
     PROVIDERS_ENABLED,
 )
-from database import add_payment, async_session_maker
+from database import async_session_maker, register_pending_payment
 from database.models import User
 from handlers.buttons import BACK, KASSAI_CARDS, KASSAI_SBP, PAY_2
 from handlers.payments.currency_rates import (
@@ -263,7 +263,8 @@ async def handle_custom_amount_input(message: types.Message, state: FSMContext, 
     if currency == "RUB":
         amount_rub = user_amount
     else:
-        async with aiohttp.ClientSession() as session_http:
+        timeout = aiohttp.ClientTimeout(total=30, connect=10)
+        async with aiohttp.ClientSession(timeout=timeout) as session_http:
             amount_rub = int(await to_rub(user_amount, "USD", session=session_http))
 
     await state.update_data(amount=amount_rub)
@@ -390,8 +391,9 @@ async def generate_kassai_payment_link(
 
     db_session = session
 
+    timeout = aiohttp.ClientTimeout(total=60, connect=10)
     try:
-        async with aiohttp.ClientSession() as http_session:
+        async with aiohttp.ClientSession(timeout=timeout) as http_session:
             async with http_session.post(url, headers=headers, json=data, timeout=60) as resp:
                 if resp.status == 200:
                     try:
@@ -399,27 +401,13 @@ async def generate_kassai_payment_link(
                         if resp_json.get("type") == "success":
                             payment_url = resp_json.get("location")
                             if payment_url:
-                                if db_session is not None:
-                                    await add_payment(
-                                        session=db_session,
-                                        tg_id=tg_id,
-                                        amount=float(amount),
-                                        payment_system="KASSAI",
-                                        status="pending",
-                                        currency="RUB",
-                                        payment_id=unique_payment_id,
-                                    )
-                                else:
-                                    async with async_session_maker() as dbs:
-                                        await add_payment(
-                                            session=dbs,
-                                            tg_id=tg_id,
-                                            amount=float(amount),
-                                            payment_system="KASSAI",
-                                            status="pending",
-                                            currency="RUB",
-                                            payment_id=unique_payment_id,
-                                        )
+                                await register_pending_payment(
+                                    payment_id=unique_payment_id,
+                                    tg_id=tg_id,
+                                    amount=float(amount),
+                                    payment_system="kassai",
+                                    currency="RUB",
+                                )
                                 logger.info(f"KassaAI payment URL created for user {tg_id}")
                                 return payment_url
                             logger.error(f"KassaAI: No location in response: {resp_json}")

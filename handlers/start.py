@@ -155,9 +155,20 @@ async def process_start_logic(
 
     await state.update_data(original_text=text, user_data=user_data)
 
+    _MAX_START_PAYLOAD_LEN = 256
+    _MAX_START_PARTS = 20
+    if text and len(text) > _MAX_START_PAYLOAD_LEN:
+        text = text[:_MAX_START_PAYLOAD_LEN]
+    parts = text.split("-") if text else []
+    if len(parts) > _MAX_START_PARTS:
+        parts = parts[:_MAX_START_PARTS]
+
     gift_detected = False
-    if text:
-        for part in text.split("-"):
+    if parts:
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
             await run_hooks("start_link", message=message, state=state, session=session, user_data=user_data, part=part)
             if "coupons" in part:
                 await handle_coupon_link(part, message, state, session, admin, user_data)
@@ -170,6 +181,8 @@ async def process_start_logic(
                 continue
             if "utm" in part:
                 await handle_utm_link(part, message, state, session, user_data)
+
+    text = "-".join(parts) if parts else (text or "")
 
     await state.clear()
     if gift_detected:

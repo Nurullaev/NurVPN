@@ -77,6 +77,20 @@ def shutdown_process_pool() -> None:
         logger.debug("[Executor] Пул процессов остановлен")
 
 
+def should_run_heavy_tasks_separately() -> bool:
+    """
+    True, если есть запас по ядрам/потокам — тогда рассылка и уведомления
+    можно выносить в отдельный поток/ядро.
+    """
+    try:
+        from config import EXECUTOR_POOL_SIZE
+        pool_size = max(1, int(EXECUTOR_POOL_SIZE))
+    except Exception:
+        pool_size = 1
+    cpu_count = multiprocessing.cpu_count() or 1
+    return cpu_count >= 2 or pool_size >= 2
+
+
 async def run_io(fn: Callable[..., T], *args: object) -> T:
     """Выполняет fn(*args) в пуле потоков (I/O). Один вызов для всех блокирующих операций."""
     loop = asyncio.get_running_loop()

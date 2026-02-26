@@ -21,7 +21,7 @@ from config import (
     HELEKET_SUCCESS_URL,
     PROVIDERS_ENABLED,
 )
-from database import add_payment, async_session_maker
+from database import async_session_maker, register_pending_payment
 from database.models import User
 from handlers.buttons import BACK, HELEKET, PAY_2
 from handlers.payments.currency_rates import (
@@ -240,7 +240,8 @@ async def handle_custom_amount_input(message: types.Message, state: FSMContext, 
     if currency == "RUB":
         amount_rub = user_amount
     else:
-        async with aiohttp.ClientSession() as session_http:
+        timeout = aiohttp.ClientTimeout(total=30, connect=10)
+        async with aiohttp.ClientSession(timeout=timeout) as session_http:
             amount_rub = int(await to_rub(user_amount, "USD", session=session_http))
 
     await state.update_data(amount=amount_rub)
@@ -336,8 +337,9 @@ async def generate_heleket_payment_link(
     unique_order_id = f"{int(time.time())}_{tg_id}"
     db_session = session
 
+    timeout = aiohttp.ClientTimeout(total=30, connect=10)
     try:
-        async with aiohttp.ClientSession() as http_session:
+        async with aiohttp.ClientSession(timeout=timeout) as http_session:
             pay_cur = str(method["currency"]).upper()
 
             if pay_cur == "RUB":
@@ -376,27 +378,13 @@ async def generate_heleket_payment_link(
                         if resp_json.get("state") == 0:
                             payment_url = resp_json.get("result", {}).get("url")
                             if payment_url:
-                                if db_session is not None:
-                                    await add_payment(
-                                        session=db_session,
-                                        tg_id=tg_id,
-                                        amount=float(amount),
-                                        payment_system="HELEKET",
-                                        status="pending",
-                                        currency="RUB",
-                                        payment_id=unique_order_id,
-                                    )
-                                else:
-                                    async with async_session_maker() as dbs:
-                                        await add_payment(
-                                            session=dbs,
-                                            tg_id=tg_id,
-                                            amount=float(amount),
-                                            payment_system="HELEKET",
-                                            status="pending",
-                                            currency="RUB",
-                                            payment_id=unique_order_id,
-                                        )
+                                await register_pending_payment(
+                                    payment_id=unique_order_id,
+                                    tg_id=tg_id,
+                                    amount=float(amount),
+                                    payment_system="heleket",
+                                    currency="RUB",
+                                )
                                 logger.info(f"Heleket payment URL created for user {tg_id}")
                                 return payment_url
                             else:

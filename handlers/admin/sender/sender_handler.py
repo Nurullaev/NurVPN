@@ -1,3 +1,5 @@
+import asyncio
+
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
@@ -5,13 +7,15 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from config import API_TOKEN
+from core.executor import run_io, should_run_heavy_tasks_separately
 from database.models import Server
 from filters.admin import IsAdminFilter
 from logger import logger
 
 from ..panel.keyboard import AdminPanelCallback, build_admin_back_kb
 from .keyboard import AdminSenderCallback, build_clusters_kb, build_sender_kb
-from .sender_service import BroadcastService
+from .sender_service import BroadcastService, run_broadcast_in_thread
 from .sender_states import AdminSender
 from .sender_utils import get_recipients, parse_message_buttons
 
@@ -192,33 +196,65 @@ async def handle_broadcast_confirm(callback_query: CallbackQuery, state: FSMCont
         _broadcast_progress_text(0, total_users_for_bar, 0, 0),
     )
 
-    messages = []
-    for tg_id in tg_ids:
-        message_data = {"tg_id": tg_id, "text": text_message, "photo": photo, "keyboard": keyboard}
-        messages.append(message_data)
-
     bot = callback_query.bot
+    state_keyboard_data = data.get("keyboard")
 
-    async def on_progress(completed: int, total: int, sent: int, failed: int) -> None:
-        text = _broadcast_progress_text(completed, total, sent, failed)
-        try:
-            await bot.edit_message_text(
-                chat_id=status_message.chat.id,
-                message_id=status_message.message_id,
-                text=text,
+    if should_run_heavy_tasks_separately():
+        main_loop = asyncio.get_running_loop()
+
+        async def _edit_progress(completed: int, total: int, sent: int, failed: int) -> None:
+            text = _broadcast_progress_text(completed, total, sent, failed)
+            try:
+                await bot.edit_message_text(
+                    chat_id=status_message.chat.id,
+                    message_id=status_message.message_id,
+                    text=text,
+                )
+            except TelegramBadRequest as e:
+                if "message is not modified" not in str(e).lower():
+                    logger.debug(f"[Sender] Обновление прогресса: {e}")
+
+        def progress_cb(completed: int, total: int, sent: int, failed: int) -> None:
+            main_loop.call_soon_threadsafe(
+                lambda c=completed, t=total, s=sent, f=failed: asyncio.ensure_future(
+                    _edit_progress(c, t, s, f), loop=main_loop
+                )
             )
-        except TelegramBadRequest as e:
-            if "message is not modified" not in str(e).lower():
-                logger.debug(f"[Sender] Обновление прогресса: {e}")
 
-    broadcast_service = BroadcastService(bot=bot, session=session, messages_per_second=35)
+        stats = await run_io(
+            run_broadcast_in_thread,
+            API_TOKEN,
+            tg_ids,
+            text_message,
+            photo,
+            state_keyboard_data,
+            progress_cb,
+        )
+    else:
+        messages = []
+        for tg_id in tg_ids:
+            message_data = {"tg_id": tg_id, "text": text_message, "photo": photo, "keyboard": keyboard}
+            messages.append(message_data)
 
-    stats = await broadcast_service.broadcast(
-        messages,
-        workers=5,
-        on_progress=on_progress,
-        progress_interval=2.0,
-    )
+        async def on_progress(completed: int, total: int, sent: int, failed: int) -> None:
+            text = _broadcast_progress_text(completed, total, sent, failed)
+            try:
+                await bot.edit_message_text(
+                    chat_id=status_message.chat.id,
+                    message_id=status_message.message_id,
+                    text=text,
+                )
+            except TelegramBadRequest as e:
+                if "message is not modified" not in str(e).lower():
+                    logger.debug(f"[Sender] Обновление прогресса: {e}")
+
+        broadcast_service = BroadcastService(bot=bot, session=session, messages_per_second=35)
+        stats = await broadcast_service.broadcast(
+            messages,
+            workers=5,
+            on_progress=on_progress,
+            progress_interval=2.0,
+        )
 
     duration_minutes = int(stats["total_duration"] // 60)
     duration_seconds = int(stats["total_duration"] % 60)

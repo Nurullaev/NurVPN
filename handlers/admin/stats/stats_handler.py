@@ -22,10 +22,7 @@ from database import (
     count_users_registered_since,
     count_users_updated_today,
     get_tariff_distribution,
-    get_tariff_durations,
-    get_tariff_groups,
-    get_tariff_names,
-    get_tariff_subgroups,
+    get_tariff_names_groups_subgroups_durations,
     sum_payments_between,
     sum_payments_since,
     sum_total_payments,
@@ -54,20 +51,14 @@ async def handle_stats(callback_query: CallbackQuery, session: AsyncSession):
         now = datetime.now(moscow_tz)
         today = now.date()
 
-        total_users = await count_total_users(session)
         today_start = moscow_tz.localize(datetime.combine(today, datetime.min.time()))
         today_start_utc = today_start.astimezone(pytz.UTC).replace(tzinfo=None)
-
-        users_updated_today = await count_users_updated_today(session, today_start_utc)
-        registrations_today = await count_users_registered_since(session, today_start_utc)
 
         yesterday_date = today - timedelta(days=1)
         yesterday_start = moscow_tz.localize(datetime.combine(yesterday_date, datetime.min.time()))
         yesterday_end = moscow_tz.localize(datetime.combine(today, datetime.min.time()))
         yesterday_start_utc = yesterday_start.astimezone(pytz.UTC).replace(tzinfo=None)
         yesterday_end_utc = yesterday_end.astimezone(pytz.UTC).replace(tzinfo=None)
-
-        registrations_yesterday = await count_users_registered_between(session, yesterday_start_utc, yesterday_end_utc)
 
         week_start_date = today - timedelta(days=today.weekday())
         week_start = moscow_tz.localize(datetime.combine(week_start_date, datetime.min.time()))
@@ -77,32 +68,35 @@ async def handle_stats(callback_query: CallbackQuery, session: AsyncSession):
         month_start = moscow_tz.localize(datetime.combine(month_start_date, datetime.min.time()))
         month_start_utc = month_start.astimezone(pytz.UTC).replace(tzinfo=None)
 
-        registrations_week = await count_users_registered_since(session, week_start_utc)
-        registrations_month = await count_users_registered_since(session, month_start_utc)
-
         last_month_start_date = (today.replace(day=1) - timedelta(days=1)).replace(day=1)
         this_month_start_date = today.replace(day=1)
-
         last_month_start = moscow_tz.localize(datetime.combine(last_month_start_date, datetime.min.time()))
         last_month_end = moscow_tz.localize(datetime.combine(this_month_start_date, datetime.min.time()))
         last_month_start_utc = last_month_start.astimezone(pytz.UTC).replace(tzinfo=None)
         last_month_end_utc = last_month_end.astimezone(pytz.UTC).replace(tzinfo=None)
 
+        total_users = await count_total_users(session)
+        users_updated_today = await count_users_updated_today(session, today_start_utc)
+        registrations_today = await count_users_registered_since(session, today_start_utc)
+        registrations_yesterday = await count_users_registered_between(
+            session, yesterday_start_utc, yesterday_end_utc
+        )
+        registrations_week = await count_users_registered_since(session, week_start_utc)
+        registrations_month = await count_users_registered_since(session, month_start_utc)
         registrations_last_month = await count_users_registered_between(
             session, last_month_start_utc, last_month_end_utc
         )
-
         total_keys = await count_total_keys(session)
         active_keys = await count_active_keys(session)
         active_paid_keys = await count_active_paid_keys(session)
         active_trial_keys = await count_active_trial_keys(session)
-        expired_keys = total_keys - active_keys
-
         tariff_counts, no_tariff_keys = await get_tariff_distribution(session, include_unbound=True)
-        tariff_names = await get_tariff_names(session, [tid for tid, _ in tariff_counts])
-        tariff_groups = await get_tariff_groups(session, [tid for tid, _ in tariff_counts])
-        tariff_subgroups = await get_tariff_subgroups(session, [tid for tid, _ in tariff_counts])
-        tariff_durations = await get_tariff_durations(session, [tid for tid, _ in tariff_counts])
+
+        expired_keys = total_keys - active_keys
+        tariff_ids = [tid for tid, _ in tariff_counts]
+        tariff_names, tariff_groups, tariff_subgroups, tariff_durations = (
+            await get_tariff_names_groups_subgroups_durations(session, tariff_ids)
+        )
 
         grouped_tariffs = {}
         for tid, count in tariff_counts:

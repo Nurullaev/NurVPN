@@ -56,7 +56,7 @@ from hooks.processors import (
 )
 from logger import logger
 
-from .utils import add_tariff_button_generic
+from .utils import add_tariff_button_generic, key_owned_by_user
 
 
 router = Router()
@@ -85,6 +85,9 @@ async def process_callback_renew_key(callback_query: CallbackQuery, state: FSMCo
         record = await get_key_details(session, key_name)
         if not record:
             await callback_query.message.answer("<b>Ключ не найден.</b>")
+            return
+        if not key_owned_by_user(record, callback_query.from_user.id):
+            await callback_query.answer("Доступ запрещён.", show_alert=True)
             return
 
         client_id = record["client_id"]

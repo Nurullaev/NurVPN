@@ -6,11 +6,58 @@ from collections import deque
 from typing import Any
 
 from aiogram import Bot
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
+from aiogram.types import InlineKeyboardMarkup
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import async_session_maker
 from logger import logger
+
+
+def run_broadcast_in_thread(
+    api_token: str,
+    tg_ids: list[int],
+    text_message: str,
+    photo: str | None,
+    keyboard_data: dict | None,
+    progress_cb: Callable[[int, int, int, int], None] | None = None,
+) -> dict:
+    """
+    Синхронная обёртка: запускает рассылку в отдельном event loop в текущем потоке.
+    """
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    bot = None
+    try:
+        bot = Bot(token=api_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+        keyboard = InlineKeyboardMarkup.model_validate(keyboard_data) if keyboard_data else None
+        messages = [
+            {"tg_id": tg_id, "text": text_message, "photo": photo, "keyboard": keyboard}
+            for tg_id in tg_ids
+        ]
+        service = BroadcastService(bot=bot, session=None, messages_per_second=35)
+
+        async def on_progress(completed: int, total: int, sent: int, failed: int) -> None:
+            if progress_cb:
+                progress_cb(completed, total, sent, failed)
+
+        return loop.run_until_complete(
+            service.broadcast(
+                messages,
+                workers=5,
+                on_progress=on_progress,
+                progress_interval=2.0,
+            )
+        )
+    finally:
+        if bot is not None and bot.session is not None:
+            try:
+                loop.run_until_complete(bot.session.close())
+            except Exception:
+                pass
+        loop.close()
 
 
 class BroadcastMessage:

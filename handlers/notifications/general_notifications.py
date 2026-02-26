@@ -34,6 +34,7 @@ from database import (
     get_all_keys,
     get_balance,
     get_last_notification_time,
+    get_last_notification_times_bulk,
     update_balance,
     update_key_expiry,
     update_key_tariff,
@@ -583,6 +584,9 @@ async def handle_expired_keys(ctx: NotificationContext, keys: list):
     notify_delete_key_enabled = bool(NOTIFICATIONS_CONFIG.get("DELETE_KEY_ENABLED", NOTIFY_DELETE_KEY))
     delete_key_delay_minutes = int(NOTIFICATIONS_CONFIG.get("DELETE_KEY_DELAY_MINUTES", NOTIFY_DELETE_DELAY))
 
+    notification_pairs = [(key.tg_id, f"{key.email or ''}_key_expired") for key in expired_keys]
+    last_times = await get_last_notification_times_bulk(ctx.session, notification_pairs)
+
     for key in expired_keys:
         tg_id = key.tg_id
         email = key.email or ""
@@ -590,7 +594,7 @@ async def handle_expired_keys(ctx: NotificationContext, keys: list):
         server_id = key.server_id
         notification_id = f"{email}_key_expired"
 
-        last_notification_time = await get_last_notification_time(ctx.session, tg_id, notification_id)
+        last_notification_time = last_times.get((tg_id, notification_id))
 
         if notify_renew_expired_enabled:
             try:
@@ -700,7 +704,7 @@ async def periodic_notifications(bot: Bot, *, sessionmaker: async_sessionmaker):
                     trial_time_disable = bool(MODES_CONFIG.get("TRIAL_TIME_DISABLED", TRIAL_TIME_DISABLE))
                     if not trial_time_disable:
                         try:
-                            await notify_inactive_trial_users(bot, session)
+                            await notify_inactive_trial_users(bot, session, sessionmaker=sessionmaker)
                         except Exception as error:
                             logger.error(f"Ошибка в notify_inactive_trial_users: {error}")
 

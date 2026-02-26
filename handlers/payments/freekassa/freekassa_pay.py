@@ -16,6 +16,11 @@ from config import (
     FREEKASSA_SECRET2,
     FREEKASSA_SHOP_ID,
 )
+from core.webhook_abuse import (
+    get_webhook_client_ip,
+    is_webhook_ip_blocked,
+    record_webhook_signature_failure,
+)
 from database import (
     add_payment,
     add_user,
@@ -25,6 +30,7 @@ from database import (
     get_key_count,
     get_payment_by_payment_id,
     get_temporary_data,
+    invalidate_payment_cache,
     update_balance,
 )
 from handlers.buttons import BACK, PAY_2
@@ -198,6 +204,9 @@ def verify_signature(params: dict) -> bool:
 
 async def freekassa_webhook(request: web.Request):
     try:
+        ip = get_webhook_client_ip(request)
+        if await is_webhook_ip_blocked(ip):
+            return web.Response(status=429)
         params = dict(request.query)
         logger.info(f"Received Freekassa webhook: {params}")
 
@@ -213,6 +222,7 @@ async def freekassa_webhook(request: web.Request):
 
         if not verify_signature(params):
             logger.error("Invalid signature in webhook")
+            await record_webhook_signature_failure(ip)
             return web.Response(status=400, text="Invalid signature")
 
         if str(merchant_id) != str(FREEKASSA_SHOP_ID):
@@ -244,6 +254,7 @@ async def freekassa_webhook(request: web.Request):
             await send_payment_success_notification(tg_id_int, amount_float, session)
             await add_payment(session, tg_id_int, amount_float, "freekassa", payment_id=merchant_order_id)
             await clear_temporary_data(session, tg_id_int)
+            await invalidate_payment_cache(merchant_order_id)
 
         logger.info(f"Payment processed successfully. User: {tg_id_int}, Amount: {amount_float}")
         return web.Response(text="YES")

@@ -7,6 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from handlers.payments.currency_rates import format_for_user
 
 
+def key_owned_by_user(record: dict | None, user_id: int) -> bool:
+    """Проверка, что ключ принадлежит пользователю (защита от пересылки callback)."""
+    return record is not None and record.get("tg_id") == user_id
+
+
 async def add_tariff_button_generic(
     builder: InlineKeyboardBuilder,
     tariff: dict[str, Any],

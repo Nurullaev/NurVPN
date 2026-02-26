@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any, TypedDict
 
@@ -13,8 +14,18 @@ class UserInfo(TypedDict):
     action: str | None
 
 
+def _log_activity_sync(user_info: UserInfo) -> None:
+    """Синхронный вывод в лог, чтобы не блокировать event loop в create_task."""
+    logger.info(
+        f"Активность пользователя │ "
+        f"ID: {str(user_info['user_id']).ljust(10)} │ "
+        f"Имя: {user_info['username'] or '—':<15} │ "
+        f"Действие: {user_info['action'] or '—'}"
+    )
+
+
 class LoggingMiddleware(BaseMiddleware):
-    """Middleware для логирования действий пользователя."""
+    """Middleware для логирования действий пользователя. Лог пишется в фоне, не задерживая обработчик."""
 
     async def __call__(
         self,
@@ -25,12 +36,7 @@ class LoggingMiddleware(BaseMiddleware):
         user_info = self._extract_user_info(event)
 
         if user_info["user_id"]:
-            logger.info(
-                f"Активность пользователя │ "
-                f"ID: {str(user_info['user_id']).ljust(10)} │ "
-                f"Имя: {user_info['username'] or '—':<15} │ "
-                f"Действие: {user_info['action'] or '—'}"
-            )
+            asyncio.create_task(asyncio.to_thread(_log_activity_sync, user_info))
 
         return await handler(event, data)
 

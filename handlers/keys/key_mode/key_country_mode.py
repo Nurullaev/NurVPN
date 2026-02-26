@@ -264,6 +264,9 @@ async def change_location_callback(callback_query: CallbackQuery, session: Any):
         if not record:
             await callback_query.answer("❌ Ключ не найден", show_alert=True)
             return
+        if record.get("tg_id") != callback_query.from_user.id:
+            await callback_query.answer("Доступ запрещён.", show_alert=True)
+            return
 
         expiry_timestamp = record["expiry_time"]
         ts = int(expiry_timestamp / 1000)

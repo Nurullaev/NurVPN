@@ -42,6 +42,7 @@ from handlers.texts import (
     ROUTER_MESSAGE,
     SUBSCRIPTION_DETAILS_TEXT,
 )
+from handlers.keys.utils import key_owned_by_user
 from handlers.utils import edit_or_send_message, is_full_remnawave_cluster
 from hooks.processors import process_remnawave_webapp_override
 
@@ -75,6 +76,10 @@ async def send_instructions(callback_query_or_message: CallbackQuery | Message):
 @router.callback_query(F.data.startswith("connect_pc|"))
 async def process_connect_pc(callback_query: CallbackQuery, session: Any):
     key_name = callback_query.data.split("|")[1]
+    record = await get_key_details(session, key_name)
+    if not key_owned_by_user(record, callback_query.from_user.id):
+        await callback_query.answer("Доступ запрещён.", show_alert=True)
+        return
     key_link = await get_subscription_link(session, key_name)
     if not key_link:
         builder = InlineKeyboardBuilder()
@@ -103,6 +108,10 @@ async def process_connect_pc(callback_query: CallbackQuery, session: Any):
 @router.callback_query(F.data.startswith("windows_menu|"))
 async def process_windows_menu(callback_query: CallbackQuery, session: Any):
     key_name = callback_query.data.split("|")[1]
+    record = await get_key_details(session, key_name)
+    if not key_owned_by_user(record, callback_query.from_user.id):
+        await callback_query.answer("Доступ запрещён.", show_alert=True)
+        return
     key_link = await get_subscription_link(session, key_name)
     if not key_link:
         await callback_query.message.answer("❌ Ошибка: ключ не найден.")
@@ -136,6 +145,10 @@ async def process_windows_menu(callback_query: CallbackQuery, session: Any):
 @router.callback_query(F.data.startswith("macos_menu|"))
 async def process_macos_menu(callback_query: CallbackQuery, session: Any):
     key_name = callback_query.data.split("|")[1]
+    record = await get_key_details(session, key_name)
+    if not key_owned_by_user(record, callback_query.from_user.id):
+        await callback_query.answer("Доступ запрещён.", show_alert=True)
+        return
     key_link = await get_subscription_link(session, key_name)
     if not key_link:
         await callback_query.message.answer("❌ Ошибка: ключ не найден.")
@@ -171,6 +184,9 @@ async def process_connect_tv(callback_query: CallbackQuery, session: Any):
     key_name = callback_query.data.split("|", 1)[1]
 
     record = await get_key_details(session, key_name)
+    if not key_owned_by_user(record, callback_query.from_user.id):
+        await callback_query.answer("Доступ запрещён.", show_alert=True)
+        return
     final_link = None
     is_full_remnawave = False
     use_webapp = False
@@ -221,6 +237,10 @@ async def process_connect_tv(callback_query: CallbackQuery, session: Any):
 @router.callback_query(F.data.startswith("continue_tv|"))
 async def process_continue_tv(callback_query: CallbackQuery, session: Any):
     key_name = callback_query.data.split("|")[1]
+    record = await get_key_details(session, key_name)
+    if not key_owned_by_user(record, callback_query.from_user.id):
+        await callback_query.answer("Доступ запрещён.", show_alert=True)
+        return
     key_link = await get_subscription_link(session, key_name)
     message_text = SUBSCRIPTION_DETAILS_TEXT.format(subscription_link=key_link)
 
@@ -239,6 +259,10 @@ async def process_continue_tv(callback_query: CallbackQuery, session: Any):
 @router.callback_query(F.data.startswith("connect_router|"))
 async def process_connect_router(callback_query: CallbackQuery, session: Any):
     key_name = callback_query.data.split("|")[1]
+    record = await get_key_details(session, key_name)
+    if not key_owned_by_user(record, callback_query.from_user.id):
+        await callback_query.answer("Доступ запрещён.", show_alert=True)
+        return
     key_link = await get_subscription_link(session, key_name)
     if not key_link:
         builder = InlineKeyboardBuilder()

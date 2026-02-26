@@ -99,6 +99,35 @@ async def get_tariffs(
         return []
 
 
+async def get_tariff_names_groups_subgroups_durations(
+    session: AsyncSession, tariff_ids: list[int]
+) -> tuple[dict[int, str], dict[int, str], dict[int, str | None], dict[int, int]]:
+    """Один запрос: id, name, group_code, subgroup_title, duration_days → четыре словаря."""
+    if not tariff_ids:
+        return {}, {}, {}, {}
+
+    result = await session.execute(
+        select(
+            Tariff.id,
+            Tariff.name,
+            Tariff.group_code,
+            Tariff.subgroup_title,
+            Tariff.duration_days,
+        ).where(Tariff.id.in_(tariff_ids))
+    )
+    rows = result.all()
+    names = {}
+    groups = {}
+    subgroups = {}
+    durations = {}
+    for tid, name, group_code, subgroup_title, duration_days in rows:
+        names[tid] = name
+        groups[tid] = group_code
+        subgroups[tid] = subgroup_title
+        durations[tid] = duration_days
+    return names, groups, subgroups, durations
+
+
 async def get_tariff_by_id(session: AsyncSession, tariff_id: int):
     key = cache_key("tariff", tariff_id)
     cached = await cache_get(key)

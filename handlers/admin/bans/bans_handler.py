@@ -16,6 +16,7 @@ from database import delete_user_data
 from database.models import BlockedUser, Key, ManualBan
 from filters.admin import IsAdminFilter
 from logger import logger
+from middlewares.ban_checker import invalidate_ban_cache
 
 from ..panel.keyboard import AdminPanelCallback
 from .keyboard import (
@@ -245,8 +246,12 @@ async def handle_clear_shadow_bans(callback_query: CallbackQuery, session: Async
             )
             return
 
+        tg_ids_result = await session.execute(select(ManualBan.tg_id).where(ManualBan.reason == "shadow"))
+        tg_ids_to_invalidate = [r[0] for r in tg_ids_result.all()]
         await session.execute(delete(ManualBan).where(ManualBan.reason == "shadow"))
         await session.commit()
+        for uid in tg_ids_to_invalidate:
+            await invalidate_ban_cache(uid)
 
         await callback_query.message.answer(
             text=f"🗑️ Очищено {total_count} записей теневых банов из базы данных.",
@@ -279,8 +284,14 @@ async def handle_clear_manual_bans(callback_query: CallbackQuery, session: Async
             )
             return
 
+        tg_ids_result = await session.execute(
+            select(ManualBan.tg_id).where(or_(ManualBan.reason != "shadow", ManualBan.reason.is_(None)))
+        )
+        tg_ids_to_invalidate = [r[0] for r in tg_ids_result.all()]
         await session.execute(delete(ManualBan).where(or_(ManualBan.reason != "shadow", ManualBan.reason.is_(None))))
         await session.commit()
+        for uid in tg_ids_to_invalidate:
+            await invalidate_ban_cache(uid)
 
         await callback_query.message.answer(
             text=f"🗑️ Очищено {total_count} записей ручных банов из базы данных.",
@@ -358,6 +369,8 @@ async def handle_preemptive_ids_input(message: Message, state: FSMContext, sessi
 
     await session.execute(stmt)
     await session.commit()
+    for uid in tg_ids:
+        await invalidate_ban_cache(uid)
 
     await message.answer(
         f"✅ Успешно добавлено в теневой бан: <b>{len(tg_ids)}</b> пользователей.",

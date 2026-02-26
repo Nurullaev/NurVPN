@@ -5,10 +5,16 @@ import json
 from aiohttp import web
 
 from config import HELEKET_API_KEY
+from core.webhook_abuse import (
+    get_webhook_client_ip,
+    is_webhook_ip_blocked,
+    record_webhook_signature_failure,
+)
 from database import (
     add_payment,
     async_session_maker,
     get_payment_by_payment_id,
+    invalidate_payment_cache,
     update_balance,
     update_payment_status,
 )
@@ -106,18 +112,30 @@ async def process_heleket_webhook(data: dict) -> bool:
                     if payment.get("status") == "success":
                         logger.info(f"Heleket: платёж {order_id} уже обработан")
                         return True
-                    ok = await update_payment_status(
-                        session=session, internal_id=int(payment["id"]), new_status="success"
-                    )
-                    if not ok:
-                        logger.error(f"Heleket: не удалось обновить статус платежа {order_id}")
-                        return False
+                    if payment.get("id") is not None:
+                        ok = await update_payment_status(
+                            session=session, internal_id=int(payment["id"]), new_status="success"
+                        )
+                        if not ok:
+                            logger.error(f"Heleket: не удалось обновить статус платежа {order_id}")
+                            return False
+                    else:
+                        await add_payment(
+                            session=session,
+                            tg_id=tg_id,
+                            amount=balance_amount,
+                            payment_system="HELEKET",
+                            status="success",
+                            currency="USD",
+                            payment_id=order_id,
+                            metadata=None,
+                        )
                 else:
                     await add_payment(
                         session=session,
                         tg_id=tg_id,
                         amount=balance_amount,
-                        payment_system="HELEKET",
+                        payment_system="heleket",
                         status="success",
                         currency="USD",
                         payment_id=order_id,
@@ -126,6 +144,7 @@ async def process_heleket_webhook(data: dict) -> bool:
 
                 await update_balance(session, tg_id, balance_amount)
                 await send_payment_success_notification(tg_id, balance_amount, session)
+                await invalidate_payment_cache(order_id)
             logger.info(
                 f"Heleket: платёж {order_id} для пользователя {tg_id} "
                 f"успешно обработан, баланс пополнен на {balance_amount} RUB"
@@ -136,13 +155,14 @@ async def process_heleket_webhook(data: dict) -> bool:
 
             async with async_session_maker() as session:
                 payment = await get_payment_by_payment_id(session, order_id)
-                if payment:
+                if payment and payment.get("id") is not None:
                     await update_payment_status(
                         session=session,
                         internal_id=int(payment["id"]),
                         new_status="failed",
                     )
                     await session.commit()
+                await invalidate_payment_cache(order_id)
             return True
         else:
             logger.info(f"Heleket: промежуточный статус {status} для платежа {order_id}")
@@ -155,11 +175,15 @@ async def process_heleket_webhook(data: dict) -> bool:
 async def heleket_webhook(request: web.Request):
     """Обработчик webhook от Heleket для aiohttp."""
     try:
+        ip = get_webhook_client_ip(request)
+        if await is_webhook_ip_blocked(ip):
+            return web.Response(status=429)
         data = await request.json()
         logger.info(f"Heleket webhook received from {request.remote}")
 
         if not verify_heleket_signature(data):
             logger.error("Heleket webhook: неверная подпись")
+            await record_webhook_signature_failure(ip)
             return web.Response(status=400, text="Invalid signature")
 
         success = await process_heleket_webhook(data)

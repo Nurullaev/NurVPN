@@ -6,7 +6,7 @@ from aiogram import Bot, Router, types
 from aiogram.types import InlineKeyboardButton, WebAppInfo
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import update
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from config import (
     NOTIFY_EXTRA_DAYS,
@@ -38,7 +38,9 @@ router = Router()
 moscow_tz = pytz.timezone("Europe/Moscow")
 
 
-async def notify_inactive_trial_users(bot: Bot, session: AsyncSession):
+async def notify_inactive_trial_users(
+    bot: Bot, session: AsyncSession, *, sessionmaker: async_sessionmaker | None = None
+):
     logger.info("Проверка пользователей, не активировавших пробный период...")
 
     inactive_hours = int(NOTIFICATIONS_CONFIG.get("INACTIVE_USER_ENABLED", NOTIFY_INACTIVE))
@@ -119,8 +121,13 @@ async def notify_inactive_trial_users(bot: Bot, session: AsyncSession):
                 sent_tg_ids.append(msg["tg_id"])
 
         if sent_tg_ids:
-            for tg_id in sent_tg_ids:
-                await add_notification(session, tg_id, "inactive_trial")
+            if sessionmaker is not None:
+                async with sessionmaker() as fresh_session:
+                    for tg_id in sent_tg_ids:
+                        await add_notification(fresh_session, tg_id, "inactive_trial")
+            else:
+                for tg_id in sent_tg_ids:
+                    await add_notification(session, tg_id, "inactive_trial")
             logger.info(f"Отправлено {len(sent_tg_ids)} уведомлений неактивным пользователям.")
 
     logger.info("Проверка пользователей с неактивным пробным периодом завершена.")

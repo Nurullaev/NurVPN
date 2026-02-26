@@ -6,6 +6,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.cache_config import (
+    BALANCE_CACHE_TTL_SEC,
     USER_EXISTS_CACHE_TTL_SEC,
     USER_SNAPSHOT_CACHE_TTL_SEC,
 )
@@ -76,6 +77,14 @@ async def add_user(
         raise
 
 
+async def invalidate_balance_cache(tg_id: int) -> None:
+    await cache_delete(cache_key("balance", tg_id))
+
+
+async def invalidate_profile_cache(tg_id: int) -> None:
+    await cache_delete(cache_key("profile_data", tg_id))
+
+
 async def update_balance(session: AsyncSession, tg_id: int, amount: float) -> None:
     try:
         res = await session.execute(
@@ -91,6 +100,8 @@ async def update_balance(session: AsyncSession, tg_id: int, amount: float) -> No
             logger.info(f"[DB] Баланс пользователя {tg_id} обновлён: {old_balance} → {new_balance}")
         else:
             logger.info(f"[DB] Баланс пользователя {tg_id} не изменён: пользователь не найден")
+        await invalidate_balance_cache(tg_id)
+        await invalidate_profile_cache(tg_id)
     except SQLAlchemyError as e:
         logger.error(f"[DB] Ошибка при обновлении баланса пользователя {tg_id}: {e}")
         await session.rollback()
@@ -108,15 +119,25 @@ async def check_user_exists(session: AsyncSession, tg_id: int) -> bool:
 
 
 async def get_balance(session: AsyncSession, tg_id: int) -> float:
+    cached = await cache_get(cache_key("balance", tg_id))
+    if cached is not None:
+        try:
+            return round(float(cached), 1)
+        except (TypeError, ValueError):
+            pass
     result = await session.execute(select(func.coalesce(User.balance, 0.0)).where(User.tg_id == tg_id))
     balance = result.scalar_one_or_none()
-    return round(float(balance or 0.0), 1)
+    value = round(float(balance or 0.0), 1)
+    await cache_set(cache_key("balance", tg_id), value, BALANCE_CACHE_TTL_SEC)
+    return value
 
 
 async def set_user_balance(session: AsyncSession, tg_id: int, balance: float) -> None:
     try:
         await session.execute(update(User).where(User.tg_id == tg_id).values(balance=balance))
         await session.commit()
+        await invalidate_balance_cache(tg_id)
+        await invalidate_profile_cache(tg_id)
     except SQLAlchemyError as e:
         logger.error(f"Ошибка при установке баланса для пользователя {tg_id}: {e}")
         await session.rollback()
@@ -127,6 +148,7 @@ async def update_trial(session: AsyncSession, tg_id: int, status: int):
     try:
         await session.execute(update(User).where(User.tg_id == tg_id).values(trial=status))
         await session.commit()
+        await invalidate_profile_cache(tg_id)
         invalidate_user_snapshot(tg_id)
         logger.info(f"[DB] Триал статус обновлён для пользователя {tg_id}: {status}")
     except SQLAlchemyError as e:
@@ -139,6 +161,45 @@ async def get_trial(session: AsyncSession, tg_id: int) -> int:
     result = await session.execute(select(func.coalesce(User.trial, 0)).where(User.tg_id == tg_id))
     trial = result.scalar_one_or_none()
     return int(trial or 0)
+
+
+async def get_balance_and_trial(session: AsyncSession, tg_id: int) -> tuple[float, int]:
+    """Один запрос к БД для баланса и триала (профиль при промахе кэша)."""
+    result = await session.execute(
+        select(
+            func.coalesce(User.balance, 0.0),
+            func.coalesce(User.trial, 0),
+        ).where(User.tg_id == tg_id)
+    )
+    row = result.one_or_none()
+    if row is None:
+        return 0.0, 0
+    balance, trial = row
+    return round(float(balance or 0.0), 1), int(trial or 0)
+
+
+async def get_balance_trial_key_count(session: AsyncSession, tg_id: int) -> tuple[float, int, int]:
+    """
+    Один запрос: баланс, триал и число ключей пользователя (для профиля при промахе кэша).
+    Возвращает (balance_rub, trial_status, key_count).
+    """
+    key_count_subq = select(func.count()).select_from(Key).where(Key.tg_id == User.tg_id).scalar_subquery()
+    result = await session.execute(
+        select(
+            func.coalesce(User.balance, 0.0),
+            func.coalesce(User.trial, 0),
+            key_count_subq,
+        ).where(User.tg_id == tg_id)
+    )
+    row = result.one_or_none()
+    if row is None:
+        return 0.0, 0, 0
+    balance, trial, key_count = row
+    return (
+        round(float(balance or 0.0), 1),
+        int(trial or 0),
+        int(key_count or 0),
+    )
 
 
 async def upsert_user(

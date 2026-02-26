@@ -8,7 +8,7 @@ from urllib.parse import quote_plus, urlencode
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import ROBOKASSA_LOGIN, ROBOKASSA_PASSWORD1, ROBOKASSA_PASSWORD2, ROBOKASSA_TEST_MODE
-from database import add_payment
+from database import register_pending_payment
 from handlers.payments.payment_links import register_payment_creator
 
 
@@ -61,15 +61,12 @@ async def create_and_store_robokassa_payment(
     session: AsyncSession, tg_id: int, amount: int | float, description: str, inv_id: int = 0
 ) -> tuple[str, str]:
     url, pid = generate_payment_link(amount, inv_id, description, tg_id)
-    await add_payment(
-        session=session,
+    await register_pending_payment(
+        payment_id=pid,
         tg_id=tg_id,
         amount=float(amount),
         payment_system="robokassa",
-        status="pending",
         currency="RUB",
-        payment_id=pid,
-        metadata=None,
     )
     return url, pid
 

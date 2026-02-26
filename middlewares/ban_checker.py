@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import ADMIN_ID, SUPPORT_CHAT_URL
 from core.cache_config import BAN_CACHE_TTL_SEC
-from core.redis_cache import cache_get, cache_key, cache_set
+from core.redis_cache import cache_delete, cache_get, cache_key, cache_set
 from database import async_session_maker
 from database.models import ManualBan
 from logger import logger
@@ -18,6 +18,11 @@ from logger import logger
 
 TZ = timezone("Europe/Moscow")
 _BAN_CACHE_TTL = BAN_CACHE_TTL_SEC
+
+
+async def invalidate_ban_cache(tg_id: int) -> None:
+    """Сбросить кэш статуса бана после добавления/снятия бана."""
+    await cache_delete(cache_key("ban_status", tg_id))
 
 
 class BanCheckerMiddleware(BaseMiddleware):
@@ -81,10 +86,14 @@ class BanCheckerMiddleware(BaseMiddleware):
                         until_parsed = datetime.fromisoformat(until_raw)
                     except ValueError:
                         until_parsed = None
-                ban_info = {
-                    "reason": cached.get("reason") or "не указана",
-                    "until": until_parsed,
-                }
+                if until_parsed is not None and until_parsed < datetime.utcnow():
+                    ban_info = None
+                    await cache_delete(cache_key("ban_status", tg_id))
+                else:
+                    ban_info = {
+                        "reason": cached.get("reason") or "не указана",
+                        "until": until_parsed,
+                    }
         else:
             session = data.get("session")
             if session is not None and getattr(session, "execute", None) is not None:

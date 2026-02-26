@@ -3,10 +3,16 @@ import hashlib
 from aiohttp import web
 
 from config import KASSAI_SECRET_KEY, KASSAI_SHOP_ID, KASSAI_WEBHOOK_RESPONSE
+from core.webhook_abuse import (
+    get_webhook_client_ip,
+    is_webhook_ip_blocked,
+    record_webhook_signature_failure,
+)
 from database import (
     add_payment,
     async_session_maker,
     get_payment_by_payment_id,
+    invalidate_payment_cache,
     update_balance,
     update_payment_status,
 )
@@ -44,14 +50,19 @@ def verify_kassai_signature(data: dict, signature: str) -> bool:
 async def kassai_webhook(request: web.Request):
     """Обработчик webhook от KassaAI для aiohttp."""
     try:
+        ip = get_webhook_client_ip(request)
+        if await is_webhook_ip_blocked(ip):
+            return web.Response(status=429)
         data = await request.post()
         logger.info(f"KassaAI webhook received: {dict(data)}")
         signature = data.get("SIGN", "")
         if not signature:
             logger.error("KassaAI webhook: отсутствует подпись")
+            await record_webhook_signature_failure(ip)
             return web.Response(status=400)
         if not verify_kassai_signature(data, signature):
             logger.error("KassaAI webhook: неверная подпись")
+            await record_webhook_signature_failure(ip)
             return web.Response(status=400)
 
         amount_raw = data.get("AMOUNT")
@@ -77,10 +88,24 @@ async def kassai_webhook(request: web.Request):
                 if payment.get("status") == "success":
                     logger.info(f"KassaAI: платёж {order_id} уже обработан")
                     return web.Response(text=KASSAI_WEBHOOK_RESPONSE)
-                ok = await update_payment_status(session=session, internal_id=int(payment["id"]), new_status="success")
-                if not ok:
-                    logger.error(f"KassaAI: не удалось обновить статус платежа {order_id}")
-                    return web.Response(status=500)
+                if payment.get("id") is not None:
+                    ok = await update_payment_status(
+                        session=session, internal_id=int(payment["id"]), new_status="success"
+                    )
+                    if not ok:
+                        logger.error(f"KassaAI: не удалось обновить статус платежа {order_id}")
+                        return web.Response(status=500)
+                else:
+                    await add_payment(
+                        session=session,
+                        tg_id=tg_id,
+                        amount=amount,
+                        payment_system="kassai",
+                        status="success",
+                        currency="RUB",
+                        payment_id=order_id,
+                        metadata=None,
+                    )
             else:
                 await add_payment(
                     session=session,
@@ -95,6 +120,7 @@ async def kassai_webhook(request: web.Request):
 
             await update_balance(session, tg_id, amount)
             await send_payment_success_notification(tg_id, amount, session)
+            await invalidate_payment_cache(order_id)
         logger.info(
             f"KassaAI: платёж {order_id} успешно обработан, баланс пользователя {tg_id} пополнен на {amount} RUB"
         )

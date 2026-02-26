@@ -5,11 +5,49 @@ from sqlalchemy import and_, insert, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.cache_config import PAYMENT_PENDING_CACHE_TTL_SEC
+from core.redis_cache import cache_delete, cache_get, cache_key, cache_set
 from database.models import Payment
 from logger import logger
 
 
 MOSCOW_TZ = timezone("Europe/Moscow")
+
+
+def _payment_cache_key(pid: str) -> str:
+    return cache_key("payment_pending", pid)
+
+
+async def register_pending_payment(
+    payment_id: str,
+    tg_id: int,
+    amount: float,
+    payment_system: str,
+    *,
+    currency: str = "RUB",
+    metadata: dict | None = None,
+    original_amount: float | None = None,
+) -> bool:
+    """Регистрирует ожидающий платёж только в Redis. В БД пишем при success/fail из вебхука."""
+    data = {
+        "tg_id": tg_id,
+        "amount": amount,
+        "currency": currency,
+        "status": "pending",
+        "payment_system": payment_system,
+        "payment_id": payment_id,
+        "metadata": metadata,
+        "original_amount": original_amount,
+    }
+    ok = await cache_set(_payment_cache_key(payment_id), data, PAYMENT_PENDING_CACHE_TTL_SEC)
+    if ok:
+        logger.debug(f"[Payments] Pending в кэше: payment_id={payment_id}, tg_id={tg_id}")
+    return ok
+
+
+async def invalidate_payment_cache(payment_id: str) -> None:
+    """Вызвать после сохранения платежа в БД (success/fail) из вебхука."""
+    await cache_delete(_payment_cache_key(payment_id))
 
 
 async def add_payment(
@@ -142,6 +180,21 @@ async def update_payment_status(
 
 
 async def get_payment_by_payment_id(session: AsyncSession, pid: str) -> dict | None:
+    """Сначала Redis (pending), затем БД. Из кэша возвращается запись без id — вебхук делает add_payment."""
+    cached = await cache_get(_payment_cache_key(pid))
+    if cached is not None:
+        return {
+            "id": None,
+            "tg_id": cached["tg_id"],
+            "amount": cached["amount"],
+            "currency": cached.get("currency", "RUB"),
+            "status": cached.get("status", "pending"),
+            "payment_system": cached["payment_system"],
+            "payment_id": cached["payment_id"],
+            "created_at": None,
+            "metadata": cached.get("metadata"),
+            "original_amount": cached.get("original_amount"),
+        }
     try:
         result = await session.execute(select(Payment).where(Payment.payment_id == pid).limit(1))
         payment = result.scalar_one_or_none()

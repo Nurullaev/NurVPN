@@ -2,7 +2,7 @@ import asyncio
 
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import SUPERNODE
@@ -21,37 +21,37 @@ async def get_user_traffic(session: AsyncSession, tg_id: int, email: str) -> dic
     """
     Получает трафик пользователя на всех серверах, где у него есть ключ (3x-ui и Remnawave).
     Для Remnawave трафик считается один раз и отображается как "Remnawave (общий):".
+    Один запрос: Key + Server через join.
     """
-    result = await session.execute(select(Key.client_id, Key.server_id).where(Key.tg_id == tg_id, Key.email == email))
+    join_cond = or_(
+        Key.server_id == Server.server_name,
+        Key.server_id == Server.cluster_name,
+    )
+    result = await session.execute(
+        select(Key.client_id, Key.server_id, Server)
+        .select_from(Key)
+        .join(Server, join_cond)
+        .where(Server.enabled.is_(True), Key.tg_id == tg_id, Key.email == email)
+    )
     rows = result.all()
     if not rows:
         return {"status": "error", "message": "У пользователя нет активных ключей."}
 
-    server_ids = {row.server_id for row in rows}
-    server_id = list(server_ids)[0]
 
-    result = await session.execute(
-        select(Server)
-        .where(Server.enabled.is_(True))
-        .where(Server.server_name.in_(server_ids) | Server.cluster_name.in_(server_ids))
-    )
-    server_rows = result.scalars().all()
-    if not server_rows:
-        logger.error(f"Не найдено серверов для: {server_ids}")
-        return {
-            "status": "error",
-            "message": f"Серверы не найдены: {', '.join(server_ids)}",
-        }
-
-    servers_map = {
-        s.server_name: {
-            "server_name": s.server_name,
-            "cluster_name": s.cluster_name,
-            "api_url": s.api_url,
-            "panel_type": s.panel_type,
-        }
-        for s in server_rows
-    }
+    seen_pairs = set()
+    unique_rows = []
+    servers_map = {}
+    for client_id, server_id, server in rows:
+        if (client_id, server_id) not in seen_pairs:
+            seen_pairs.add((client_id, server_id))
+            unique_rows.append((client_id, server_id))
+        if server.server_name not in servers_map:
+            servers_map[server.server_name] = {
+                "server_name": server.server_name,
+                "cluster_name": server.cluster_name,
+                "api_url": server.api_url,
+                "panel_type": server.panel_type,
+            }
 
     user_traffic_data = {}
     tasks = []
@@ -80,10 +80,7 @@ async def get_user_traffic(session: AsyncSession, tg_id: int, email: str) -> dic
         except Exception as e:
             return server_name, f"Ошибка: {e}"
 
-    for row in rows:
-        client_id = row.client_id
-        server_id = row.server_id
-
+    for client_id, server_id in unique_rows:
         matched_servers = [
             s for s in servers_map.values() if s["server_name"] == server_id or s["cluster_name"] == server_id
         ]
