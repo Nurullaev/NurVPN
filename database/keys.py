@@ -134,6 +134,8 @@ def _key_to_cache_dict(k: Key) -> dict:
         "created_at": int(k.created_at) if k.created_at is not None else 0,
         "tariff_id": k.tariff_id,
         "server_id": k.server_id,
+        "key": k.key,
+        "remnawave_link": k.remnawave_link,
         "is_frozen": bool(k.is_frozen) if k.is_frozen is not None else False,
     }
 
