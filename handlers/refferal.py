@@ -43,7 +43,7 @@ from handlers.texts import (
 from logger import logger
 
 from .texts import get_referral_link
-from .utils import edit_or_send_message, format_days
+from .utils import edit_or_send_message, format_days, safe_answer_inline_query
 
 
 router = Router()
@@ -139,7 +139,7 @@ async def inline_referral_handler(inline_query: InlineQuery, session: AsyncSessi
 
     trial_tariffs = await get_tariffs(session, group_code="trial")
     if not trial_tariffs:
-        await inline_query.answer(results=[], cache_time=0)
+        await safe_answer_inline_query(inline_query, results=[], cache_time=0)
         return
 
     trial_days = trial_tariffs[0]["duration_days"]
@@ -168,7 +168,7 @@ async def inline_referral_handler(inline_query: InlineQuery, session: AsyncSessi
             )
         )
 
-    await inline_query.answer(results=results, cache_time=60, is_personal=True)
+    await safe_answer_inline_query(inline_query, results=results, cache_time=60, is_personal=True)
 
 
 @router.callback_query(F.data.startswith("show_referral_qr|"))

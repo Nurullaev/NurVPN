@@ -66,7 +66,7 @@ from middlewares.session import release_session_early
 
 from .admin.panel.keyboard import AdminPanelCallback
 from .refferal import handle_referral_link
-from .utils import edit_or_send_message, extract_user_data
+from .utils import edit_or_send_message, extract_user_data, safe_answer_callback
 
 
 router = Router()
@@ -127,7 +127,7 @@ async def check_subscription_callback(callback: CallbackQuery, state: FSMContext
         if member.status not in ["member", "administrator", "creator"]:
             await prompt_subscription(callback)
             return
-        await callback.answer(SUBSCRIPTION_CONFIRMED_MSG)
+        await safe_answer_callback(callback, SUBSCRIPTION_CONFIRMED_MSG)
         data = await state.get_data()
         original_text = data.get("original_text") or callback.message.text
         user_data = data.get("user_data") or extract_user_data(callback.from_user)
@@ -135,7 +135,7 @@ async def check_subscription_callback(callback: CallbackQuery, state: FSMContext
         await process_start_logic(callback.message, state, session, admin, original_text, user_data)
     except Exception as e:
         logger.error(f"[CALLBACK] Ошибка подписки: {e}", exc_info=True)
-        await callback.answer(SUBSCRIPTION_CHECK_ERROR_MSG, show_alert=True)
+        await safe_answer_callback(callback, SUBSCRIPTION_CHECK_ERROR_MSG, show_alert=True)
 
 
 async def process_start_logic(
@@ -229,11 +229,7 @@ async def process_start_logic(
 
 async def handle_coupon_link(part, message, state, session, admin, user_data):
     code = part.split("coupons")[1].strip("_")
-    coupon = await get_coupon_by_code(session, code)
-    if coupon:
-        await activate_coupon(message, state, session, code, admin=admin, user_data=user_data)
-        if getattr(coupon, "days", None):
-            return
+    await activate_coupon(message, state, session, code, admin=admin, user_data=user_data)
 
 
 async def handle_gift(part, message, state, session, user_data):
@@ -268,7 +264,7 @@ async def handle_referral_link_safe(part, message, state, session, user_data):
 
 
 async def prompt_subscription(callback: CallbackQuery):
-    await callback.answer(NOT_SUBSCRIBED_YET_MSG, show_alert=True)
+    await safe_answer_callback(callback, NOT_SUBSCRIBED_YET_MSG, show_alert=True)
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text=SUB_CHANELL, url=CHANNEL_URL))
     kb.row(InlineKeyboardButton(text=SUB_CHANELL_DONE, callback_data="check_subscription"))

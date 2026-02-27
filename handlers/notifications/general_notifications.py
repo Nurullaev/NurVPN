@@ -26,6 +26,8 @@ from config import (
 from core.bootstrap import MODES_CONFIG, NOTIFICATIONS_CONFIG
 from database import (
     add_notification,
+    bulk_add_notifications,
+    bulk_delete_notifications,
     check_notification_time,
     check_notification_time_bulk,
     check_notifications_bulk,
@@ -144,34 +146,51 @@ async def preload_notification_data(session: AsyncSession) -> dict[str, Any]:
 
 async def execute_bulk_updates(session: AsyncSession, bulk_updates: dict[str, Any]) -> None:
     try:
-        if bulk_updates["balance_changes"]:
-            for tg_id, balance_change in bulk_updates["balance_changes"].items():
-                await session.execute(
-                    text("UPDATE users SET balance = balance + :change WHERE tg_id = :tg_id"),
-                    {"change": balance_change, "tg_id": tg_id},
+        balance_changes = bulk_updates.get("balance_changes") or {}
+        if balance_changes:
+            tg_ids = list(balance_changes.keys())
+            changes = [balance_changes[tg_id] for tg_id in tg_ids]
+            await session.execute(
+                text(
+                    "UPDATE users SET balance = balance + v.change FROM "
+                    "(SELECT unnest(CAST(:tg_ids AS bigint[])) AS tg_id, unnest(CAST(:changes AS double precision[])) AS change) AS v "
+                    "WHERE users.tg_id = v.tg_id"
+                ),
+                {"tg_ids": tg_ids, "changes": changes},
+            )
+            logger.info(f"Bulk: обновлено {len(balance_changes)} балансов")
+
+        key_expiry = bulk_updates.get("key_expiry_updates") or []
+        if key_expiry:
+            await session.run_sync(
+                lambda sync_sess: sync_sess.bulk_update_mappings(
+                    Key,
+                    [{"client_id": cid, "expiry_time": exp} for cid, exp in key_expiry],
                 )
-            logger.info(f"Bulk: обновлено {len(bulk_updates['balance_changes'])} балансов")
+            )
+            logger.info(f"Bulk: обновлено {len(key_expiry)} сроков действия ключей")
 
-        if bulk_updates["key_expiry_updates"]:
-            for client_id, new_expiry in bulk_updates["key_expiry_updates"]:
-                await session.execute(update(Key).where(Key.client_id == client_id).values(expiry_time=new_expiry))
-            logger.info(f"Bulk: обновлено {len(bulk_updates['key_expiry_updates'])} сроков действия ключей")
+        key_tariff = bulk_updates.get("key_tariff_updates") or []
+        if key_tariff:
+            await session.run_sync(
+                lambda sync_sess: sync_sess.bulk_update_mappings(
+                    Key,
+                    [{"client_id": cid, "tariff_id": tid} for cid, tid in key_tariff],
+                )
+            )
+            logger.info(f"Bulk: обновлено {len(key_tariff)} тарифов ключей")
 
-        if bulk_updates["key_tariff_updates"]:
-            for client_id, new_tariff_id in bulk_updates["key_tariff_updates"]:
-                await session.execute(update(Key).where(Key.client_id == client_id).values(tariff_id=new_tariff_id))
-            logger.info(f"Bulk: обновлено {len(bulk_updates['key_tariff_updates'])} тарифов ключей")
+        to_add = bulk_updates.get("notifications_to_add") or []
+        if to_add:
+            await bulk_add_notifications(session, to_add, commit=False)
 
-        for tg_id, notification_type in bulk_updates["notifications_to_add"]:
-            await add_notification(session, tg_id, notification_type)
+        to_delete = bulk_updates.get("notifications_to_delete") or []
+        if to_delete:
+            await bulk_delete_notifications(session, to_delete, commit=False)
 
-        for tg_id, notification_type in bulk_updates["notifications_to_delete"]:
-            await delete_notification(session, tg_id, notification_type)
-
-        if bulk_updates["notifications_to_add"] or bulk_updates["notifications_to_delete"]:
+        if to_add or to_delete:
             logger.info(
-                f"Bulk: обработано {len(bulk_updates['notifications_to_add'])} добавлений "
-                f"и {len(bulk_updates['notifications_to_delete'])} удалений уведомлений"
+                f"Bulk: обработано {len(to_add)} добавлений и {len(to_delete)} удалений уведомлений"
             )
 
         await session.commit()

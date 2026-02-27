@@ -17,7 +17,7 @@ from config import INLINE_MODE, USERNAME_BOT
 from database import create_coupon, delete_coupon, get_all_coupons
 from filters.admin import IsAdminFilter
 from handlers.buttons import BACK
-from handlers.utils import format_days
+from handlers.utils import format_days, safe_answer_inline_query
 from logger import logger
 
 from ..panel.keyboard import AdminPanelCallback, build_admin_back_kb
@@ -432,7 +432,8 @@ async def inline_coupon_handler(inline_query: InlineQuery, session: Any):
     coupon = next((c for c in coupons["coupons"] if c["code"] == coupon_code), None)
 
     if not coupon:
-        await inline_query.answer(
+        await safe_answer_inline_query(
+            inline_query,
             results=[],
             switch_pm_text="Купон не найден",
             switch_pm_parameter="coupons",
@@ -442,7 +443,8 @@ async def inline_coupon_handler(inline_query: InlineQuery, session: Any):
 
     percent_value = coupon.get("percent")
     if percent_value is not None and int(percent_value) > 0:
-        await inline_query.answer(
+        await safe_answer_inline_query(
+            inline_query,
             results=[],
             switch_pm_text="Процентные купоны не публикуются ссылкой",
             switch_pm_parameter="coupons",
@@ -485,4 +487,4 @@ async def inline_coupon_handler(inline_query: InlineQuery, session: Any):
         reply_markup=builder.as_markup(),
     )
 
-    await inline_query.answer(results=[result], cache_time=86400, is_personal=True)
+    await safe_answer_inline_query(inline_query, results=[result], cache_time=86400, is_personal=True)

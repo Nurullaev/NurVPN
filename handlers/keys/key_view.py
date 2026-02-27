@@ -52,6 +52,7 @@ from handlers.buttons import (
     TV_BUTTON,
     UNFREEZE,
 )
+from database import get_vless_enabled_batch
 from handlers.tariffs.tariff_display import GB, get_key_tariff_addons_state
 from handlers.texts import (
     DAYS_LEFT_MESSAGE,
@@ -70,6 +71,7 @@ from handlers.utils import (
     format_minutes,
     get_russian_month,
     is_full_remnawave_cluster,
+    safe_answer_callback,
 )
 from hooks.hook_buttons import insert_hook_buttons
 from hooks.processors import (
@@ -153,6 +155,16 @@ async def build_keys_response(records: list[Key] | None, session: AsyncSession, 
         end = start + page_size
         page_records = records[start:end]
 
+        tariff_ids = []
+        for record in page_records:
+            tid = getattr(record, "tariff_id", None)
+            if tid is not None:
+                try:
+                    tariff_ids.append(int(tid))
+                except (TypeError, ValueError):
+                    pass
+        vless_by_tariff = await get_vless_enabled_batch(session, tariff_ids) if tariff_ids else {}
+
         for record in page_records:
             alias = record.alias
             email = record.email
@@ -167,14 +179,8 @@ async def build_keys_response(records: list[Key] | None, session: AsyncSession, 
             else:
                 formatted_date_full = "без срока действия"
 
-            is_vless = False
-            if getattr(record, "tariff_id", None):
-                try:
-                    from handlers.tariffs.tariff_display import resolve_vless_enabled
-
-                    is_vless = await resolve_vless_enabled(session, int(record.tariff_id))
-                except Exception:
-                    is_vless = False
+            tid = getattr(record, "tariff_id", None)
+            is_vless = vless_by_tariff.get(int(tid), False) if tid is not None else False
 
             icon = "📶" if is_vless else "🔑"
 
@@ -232,7 +238,7 @@ async def handle_rename_key(callback: CallbackQuery, state: FSMContext, session:
     client_id = callback.data.split("|")[1]
     key_row = (await session.execute(select(Key).where(Key.client_id == client_id))).scalar_one_or_none()
     if not key_row or key_row.tg_id != callback.from_user.id:
-        await callback.answer("Доступ запрещён.", show_alert=True)
+        await safe_answer_callback(callback, "Доступ запрещён.", show_alert=True)
         return
     await state.set_state(RenameKeyState.waiting_for_new_alias)
     await state.update_data(client_id=client_id)
@@ -289,7 +295,7 @@ async def process_callback_view_key(callback_query: CallbackQuery, session: Asyn
     key_name = callback_query.data.split("|")[1]
     record = await get_key_details(session, key_name)
     if not key_owned_by_user(record, callback_query.from_user.id):
-        await callback_query.answer("Доступ запрещён.", show_alert=True)
+        await safe_answer_callback(callback_query, "Доступ запрещён.", show_alert=True)
         return
     image_path = os.path.join("img", "pic_view.jpg")
     await render_key_info(callback_query.message, session, key_name, image_path)
@@ -489,20 +495,20 @@ async def handle_reset_hwid(callback_query: CallbackQuery, session: AsyncSession
 
     record = await get_key_details(session, key_name)
     if not record:
-        await callback_query.answer("❌ Ключ не найден.", show_alert=True)
+        await safe_answer_callback(callback_query, "❌ Ключ не найден.", show_alert=True)
         return
     if not key_owned_by_user(record, callback_query.from_user.id):
-        await callback_query.answer("Доступ запрещён.", show_alert=True)
+        await safe_answer_callback(callback_query, "Доступ запрещён.", show_alert=True)
         return
 
     client_id = record.get("client_id")
     if not client_id:
-        await callback_query.answer("❌ У ключа отсутствует client_id.", show_alert=True)
+        await safe_answer_callback(callback_query, "❌ У ключа отсутствует client_id.", show_alert=True)
         return
 
     remna_api_url = await resolve_remnawave_api_url(session, str(record.get("server_id") or ""), fallback_any=True)
     if not remna_api_url:
-        await callback_query.answer("❌ Remnawave-сервер не найден.", show_alert=True)
+        await safe_answer_callback(callback_query, "❌ Remnawave-сервер не найден.", show_alert=True)
         return
 
     async def _reset_devices(api):
@@ -523,7 +529,7 @@ async def handle_reset_hwid(callback_query: CallbackQuery, session: AsyncSession
         timeout_sec=12.0,
     )
     if reset_result is None:
-        await callback_query.answer("❌ Авторизация в Remnawave не удалась.", show_alert=True)
+        await safe_answer_callback(callback_query, "❌ Авторизация в Remnawave не удалась.", show_alert=True)
         return
 
     total, deleted = reset_result
@@ -534,9 +540,9 @@ async def handle_reset_hwid(callback_query: CallbackQuery, session: AsyncSession
         fallback_any=True,
     )
     if total == 0:
-        await callback_query.answer("✅ Устройства не были привязаны.", show_alert=True)
+        await safe_answer_callback(callback_query, "✅ Устройства не были привязаны.", show_alert=True)
     else:
-        await callback_query.answer(f"✅ Устройства сброшены ({deleted})", show_alert=True)
+        await safe_answer_callback(callback_query, f"✅ Устройства сброшены ({deleted})", show_alert=True)
 
     if await process_after_hwid_reset(
         chat_id=callback_query.from_user.id,

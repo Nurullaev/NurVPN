@@ -13,6 +13,7 @@ from aiogram.types import (
     BufferedInputFile,
     CallbackQuery,
     InlineKeyboardMarkup,
+    InlineQuery,
     InputMediaAnimation,
     InputMediaPhoto,
     InputMediaVideo,
@@ -52,6 +53,19 @@ async def safe_answer_callback(callback_query: CallbackQuery, text: str | None =
     """
     try:
         await callback_query.answer(text=text, show_alert=show_alert, **kwargs)
+    except TelegramBadRequest as e:
+        msg = str(e).lower()
+        if not any(phrase in msg for phrase in _CALLBACK_ANSWER_IGNORE):
+            raise
+
+
+async def safe_answer_inline_query(inline_query: InlineQuery, *args: object, **kwargs: object) -> None:
+    """
+    Вызывает inline_query.answer(), не поднимая исключение при устаревшем запросе
+    (query is too old / response timeout). При нагрузке inline может обрабатываться с задержкой.
+    """
+    try:
+        await inline_query.answer(*args, **kwargs)
     except TelegramBadRequest as e:
         msg = str(e).lower()
         if not any(phrase in msg for phrase in _CALLBACK_ANSWER_IGNORE):
@@ -391,7 +405,8 @@ async def edit_or_send_message(
                             edit_or_send_message.cache.popitem(last=False)
             return
 
-    if not force_text and target_message.caption is not None:
+    caption = getattr(target_message, "caption", None)
+    if not force_text and caption is not None:
         try:
             await target_message.edit_caption(caption=text, reply_markup=reply_markup)
             return

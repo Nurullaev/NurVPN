@@ -1,3 +1,4 @@
+from collections import defaultdict
 from datetime import datetime, timedelta
 
 from sqlalchemy import and_, delete, func, select, tuple_
@@ -45,6 +46,43 @@ async def delete_notification(session: AsyncSession, tg_id: int, notification_ty
     )
     await session.commit()
     logger.debug(f"🗑 Уведомление {notification_type} для пользователя {tg_id} удалено")
+
+
+async def bulk_add_notifications(
+    session: AsyncSession, items: list[tuple[int, str]], *, commit: bool = False
+) -> None:
+    """Один запрос: вставка/обновление многих (tg_id, notification_type). Без commit, если commit=False."""
+    if not items:
+        return
+    now = datetime.utcnow()
+    stmt = insert(Notification).values(
+        [
+            {"tg_id": tg_id, "notification_type": ntype, "last_notification_time": now}
+            for tg_id, ntype in items
+        ]
+    ).on_conflict_do_update(
+        index_elements=[Notification.tg_id, Notification.notification_type],
+        set_={"last_notification_time": now},
+    )
+    await session.execute(stmt)
+    if commit:
+        await session.commit()
+    logger.info(f"✅ Bulk: добавлено/обновлено {len(items)} уведомлений")
+
+
+async def bulk_delete_notifications(
+    session: AsyncSession, items: list[tuple[int, str]], *, commit: bool = False
+) -> None:
+    """Один запрос: удаление многих (tg_id, notification_type). Без commit, если commit=False."""
+    if not items:
+        return
+    stmt = delete(Notification).where(
+        tuple_(Notification.tg_id, Notification.notification_type).in_(items)
+    )
+    await session.execute(stmt)
+    if commit:
+        await session.commit()
+    logger.debug(f"🗑 Bulk: удалено {len(items)} уведомлений")
 
 
 async def check_notification_time(session: AsyncSession, tg_id: int, notification_type: str, hours: int = 12) -> bool:
@@ -133,6 +171,34 @@ async def get_last_notification_times_bulk(
             if last_time:
                 out[(tg_id, ntype)] = int(last_time.timestamp() * 1000)
     return out
+
+
+_HOT_LEAD_NOTIFICATION_TYPES = (
+    "hot_lead_step_1",
+    "hot_lead_step_2",
+    "hot_lead_step_3",
+    "hot_lead_step_2_expired",
+)
+
+
+async def get_hot_lead_notification_flags(
+    session: AsyncSession, tg_ids: list[int]
+) -> dict[int, set[str]]:
+    """
+    Один запрос: для каждого tg_id возвращает множество типов уведомлений hot_lead_*,
+    которые у него уже есть. Используется в notify_hot_leads для устранения N+1.
+    """
+    if not tg_ids:
+        return {}
+    stmt = select(Notification.tg_id, Notification.notification_type).where(
+        Notification.tg_id.in_(tg_ids),
+        Notification.notification_type.in_(_HOT_LEAD_NOTIFICATION_TYPES),
+    )
+    result = await session.execute(stmt)
+    out = defaultdict(set)
+    for tg_id, ntype in result.all():
+        out[tg_id].add(ntype)
+    return dict(out)
 
 
 async def check_hot_lead_discount(session: AsyncSession, tg_id: int) -> dict:

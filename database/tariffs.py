@@ -253,6 +253,32 @@ async def check_tariff_exists(session: AsyncSession, tariff_id: int):
         return False
 
 
+async def get_vless_enabled(session: AsyncSession, tariff_id: int | None) -> bool:
+    """Возвращает, включён ли VLESS у тарифа (по кэшированному get_tariff_by_id)."""
+    if not tariff_id:
+        return False
+    tariff = await get_tariff_by_id(session, int(tariff_id))
+    if not tariff:
+        return False
+    return bool(tariff.get("vless"))
+
+
+async def get_vless_enabled_batch(
+    session: AsyncSession, tariff_ids: list[int]
+) -> dict[int, bool]:
+    """
+    Один запрос: для списка tariff_id возвращает dict[tariff_id -> vless].
+    Использовать в списках ключей вместо N вызовов get_vless_enabled.
+    """
+    if not tariff_ids:
+        return {}
+    unique_ids = list(dict.fromkeys(tariff_ids))
+    result = await session.execute(
+        select(Tariff.id, Tariff.vless).where(Tariff.id.in_(unique_ids))
+    )
+    return {row[0]: bool(row[1]) for row in result.all()}
+
+
 async def get_tariff_sort_order(session: AsyncSession, tariff_id: int) -> int:
     try:
         result = await session.execute(select(Tariff.sort_order).where(Tariff.id == tariff_id))

@@ -33,11 +33,11 @@ from handlers.buttons import (
     TV_BUTTON,
 )
 from handlers.keys.operations import create_key_on_cluster
+from database import get_vless_enabled
 from handlers.tariffs.tariff_display import (
     build_key_created_message,
     get_effective_limits_for_key,
     resolve_price_to_charge,
-    resolve_vless_enabled,
 )
 from handlers.utils import (
     edit_or_send_message,
@@ -202,9 +202,9 @@ async def key_cluster_mode(
     vless_enabled = False
     try:
         if plan:
-            vless_enabled = await resolve_vless_enabled(session, plan)
+            vless_enabled = await get_vless_enabled(session, plan)
         elif key_record.get("tariff_id"):
-            vless_enabled = await resolve_vless_enabled(session, key_record["tariff_id"])
+            vless_enabled = await get_vless_enabled(session, key_record["tariff_id"])
     except Exception:
         vless_enabled = False
 

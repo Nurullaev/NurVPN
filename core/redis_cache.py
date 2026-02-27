@@ -24,7 +24,12 @@ async def _get_redis() -> Any | None:
 
     try:
         redis_from_url = import_module("redis.asyncio").from_url
-        client = redis_from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
+        client = redis_from_url(
+            REDIS_URL,
+            encoding="utf-8",
+            decode_responses=True,
+            max_connections=64,
+        )
         await client.ping()
         _REDIS_CLIENT = client
         return _REDIS_CLIENT

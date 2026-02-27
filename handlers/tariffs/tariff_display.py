@@ -18,9 +18,11 @@ async def get_effective_limits_for_key(
     tariff_id: int | None,
     selected_device_limit: int | None,
     selected_traffic_gb: int | None,
+    tariff: dict | None = None,
 ) -> tuple[int, int]:
-    """Возвращает лимиты устройств и трафика с учётом выбранных значений."""
-    tariff = await get_tariff_by_id(session, int(tariff_id)) if tariff_id else None
+    """Возвращает лимиты устройств и трафика с учётом выбранных значений. tariff опционален — если передан, get_tariff_by_id не вызывается."""
+    if tariff is None and tariff_id:
+        tariff = await get_tariff_by_id(session, int(tariff_id))
 
     if tariff:
         base_devices = tariff.get("device_limit")
@@ -137,18 +139,6 @@ async def resolve_price_to_charge(session: AsyncSession, state_data: dict[str, A
     return int(base_price + device_add_rub + traffic_add_rub)
 
 
-async def resolve_vless_enabled(session: AsyncSession, tariff_id: int | None) -> bool:
-    """Проверяет, включён ли VLESS в тарифе."""
-    if not tariff_id:
-        return False
-
-    tariff = await get_tariff_by_id(session, int(tariff_id))
-    if not tariff:
-        return False
-
-    return bool(tariff.get("vless"))
-
-
 async def get_key_tariff_display(
     session: AsyncSession,
     key_record: dict[str, Any],
@@ -158,8 +148,9 @@ async def get_key_tariff_display(
     """Возвращает отображение тарифа и эффективные лимиты, приоритет — данные панели."""
     tariff_id = key_record.get("tariff_id")
     if not tariff_id:
-        return "", "", 0, 0, False
+        return "", "", 0, 0, False, None
 
+    tariff = await get_tariff_by_id(session, int(tariff_id))
     selected_device_limit = selected_device_limit_override
     selected_traffic_gb = selected_traffic_gb_override
 
@@ -184,6 +175,7 @@ async def get_key_tariff_display(
         tariff_id=int(tariff_id),
         selected_device_limit=selected_device_limit,
         selected_traffic_gb=selected_traffic_gb,
+        tariff=tariff,
     )
 
     server_cluster_id = key_record.get("server_id")
@@ -216,7 +208,6 @@ async def get_key_tariff_display(
 
     traffic_limit_gb = int(traffic_limit_bytes / GB) if traffic_limit_bytes else 0
 
-    tariff = await get_tariff_by_id(session, int(tariff_id))
     if tariff:
         tariff_name = tariff.get("name", "—")
         subgroup_title = tariff.get("subgroup_title") or ""
@@ -226,7 +217,7 @@ async def get_key_tariff_display(
         subgroup_title = ""
         vless_enabled = False
 
-    return tariff_name, subgroup_title, traffic_limit_gb, device_limit, vless_enabled
+    return tariff_name, subgroup_title, traffic_limit_gb, device_limit, vless_enabled, tariff
 
 
 async def get_key_tariff_addons_state(
@@ -260,6 +251,7 @@ async def get_key_tariff_addons_state(
         traffic_limit_gb,
         device_limit,
         vless_enabled,
+        tariff,
     ) = await get_key_tariff_display(
         session=session,
         key_record=key_record,
@@ -282,7 +274,6 @@ async def get_key_tariff_addons_state(
     addons_devices_enabled = False
     addons_traffic_enabled = False
 
-    tariff = await get_tariff_by_id(session, int(tariff_id))
     if tariff and tariff.get("configurable"):
         is_tariff_configurable = True
 

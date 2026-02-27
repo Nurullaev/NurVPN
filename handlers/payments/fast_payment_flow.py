@@ -390,10 +390,10 @@ async def fastflow_apply_coupon(message: Message, state: FSMContext, session: An
 
     required_amount_new = int(max(0, ceil(float(new_price) - float(balance_now))))
 
+    percent_value = int(getattr(coupon, "percent", 0) or 0)
+
     await create_coupon_usage(session, coupon.id, message.from_user.id)
     await update_coupon_usage_count(session, coupon.id)
-
-    percent_value = int(getattr(coupon, "percent", 0) or 0)
 
     temp_payload_updated = dict(temp_payload)
     temp_payload_updated["required_amount"] = int(required_amount_new)

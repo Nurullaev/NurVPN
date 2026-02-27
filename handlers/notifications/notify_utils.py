@@ -358,7 +358,7 @@ async def prepare_key_expiry_data(key, session: AsyncSession, current_time: int)
     device_limit = 0
 
     try:
-        name, subgroup_title, traffic_limit_gb, device_limit, _ = await get_key_tariff_display(
+        name, subgroup_title, traffic_limit_gb, device_limit, _, _ = await get_key_tariff_display(
             session=session,
             key_record=record,
         )
