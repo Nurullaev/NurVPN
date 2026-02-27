@@ -8,8 +8,10 @@ from datetime import datetime, timedelta
 
 import aiofiles
 
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import (
     BufferedInputFile,
+    CallbackQuery,
     InlineKeyboardMarkup,
     InputMediaAnimation,
     InputMediaPhoto,
@@ -28,6 +30,26 @@ from logger import logger
 
 
 ALLOWED_GROUP_CODES = ["trial", "discounts", "discounts_max", "gifts"]
+
+
+_CALLBACK_ANSWER_IGNORE = (
+    "query is too old",
+    "response timeout expired",
+    "query id is invalid",
+)
+
+
+async def safe_answer_callback(callback_query: CallbackQuery, text: str | None = None, show_alert: bool = False, **kwargs) -> None:
+    """
+    Вызывает callback_query.answer(), не поднимая исключение при устаревшем/уже отвеченном callback.
+    Использовать в хендлерах после долгой обработки или при наплыве пользователей.
+    """
+    try:
+        await callback_query.answer(text=text, show_alert=show_alert, **kwargs)
+    except TelegramBadRequest as e:
+        msg = str(e).lower()
+        if not any(phrase in msg for phrase in _CALLBACK_ANSWER_IGNORE):
+            raise
 
 
 async def generate_random_email(

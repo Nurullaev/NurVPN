@@ -24,7 +24,7 @@ from handlers.texts import (
     UNLIMITED_DEVICES_LABEL,
     UNLIMITED_TRAFFIC_LABEL,
 )
-from handlers.utils import edit_or_send_message
+from handlers.utils import edit_or_send_message, safe_answer_callback
 from hooks.processors import process_check_discount_validity
 from logger import logger
 
@@ -160,7 +160,7 @@ async def start_tariff_config(
             target_message=callback_query.message,
             text="❌ Указанный тариф не найден.",
         )
-        await callback_query.answer()
+        await safe_answer_callback(callback_query)
         logger.warning(f"[TARIFF_CFG] start_tariff_config tariff_not_found: tariff_id={tariff_id}")
         return
 
@@ -169,7 +169,7 @@ async def start_tariff_config(
             target_message=callback_query.message,
             text="❌ Этот тариф нельзя настроить.",
         )
-        await callback_query.answer()
+        await safe_answer_callback(callback_query)
         logger.info(f"[TARIFF_CFG] start_tariff_config not_configurable: tariff_id={tariff_id}")
         return
 
@@ -253,7 +253,7 @@ async def proceed_purchase_with_values(
         text=CREATING_CONNECTION_MSG,
         reply_markup=builder.as_markup(),
     )
-    await callback_query.answer()
+    await safe_answer_callback(callback_query)
 
     expiry_time = datetime.now(moscow_tz) + timedelta(days=duration_days)
 
@@ -306,6 +306,7 @@ async def render_user_config_screen(
             text="Подождите, создаём подписку…",
             reply_markup=None,
         )
+        await safe_answer_callback(callback_query)
         await state.clear()
         logger.warning("[TARIFF_CFG] render_user_config_screen: config_tariff_id missing in state")
         return
@@ -317,6 +318,7 @@ async def render_user_config_screen(
             text="❌ Тариф не найден.",
             reply_markup=None,
         )
+        await safe_answer_callback(callback_query)
         await state.clear()
         logger.warning(f"[TARIFF_CFG] render_user_config_screen tariff_not_found: tariff_id={tariff_id}")
         return
@@ -547,7 +549,7 @@ async def render_user_config_screen(
         text=text,
         reply_markup=builder.as_markup(),
     )
-    await callback_query.answer()
+    await safe_answer_callback(callback_query)
 
 
 async def start_user_tariff_configurator(
@@ -587,7 +589,7 @@ async def start_user_tariff_configurator(
             text="❌ Конфигуратор для этого тарифа не настроен. Попробуйте выбрать другой тариф.",
             reply_markup=None,
         )
-        await callback_query.answer()
+        await safe_answer_callback(callback_query)
         logger.warning(f"[TARIFF_CFG] configurator_not_configured: tariff_id={tariff.get('id')}")
         return
 
@@ -774,7 +776,7 @@ async def select_tariff_plan(callback_query: CallbackQuery, session: Any, state:
             target_message=callback_query.message,
             text="❌ Указанный тариф не найден.",
         )
-        await callback_query.answer()
+        await safe_answer_callback(callback_query)
         logger.warning(f"[TARIFF_CFG] select_tariff_plan tariff_not_found: tariff_id={tariff_id}")
         return
 
@@ -788,7 +790,7 @@ async def select_tariff_plan(callback_query: CallbackQuery, session: Any, state:
                 text="❌ Скидка недоступна или истекла. Пожалуйста, выберите тариф заново.",
                 reply_markup=builder.as_markup(),
             )
-            await callback_query.answer()
+            await safe_answer_callback(callback_query)
             logger.info(
                 "[TARIFF_CFG] select_tariff_plan discount_invalid: "
                 f"tg_id={tg_id} tariff_id={tariff_id} info={discount_info}"
@@ -809,7 +811,7 @@ async def select_tariff_plan(callback_query: CallbackQuery, session: Any, state:
             text=validity_result["message"],
             reply_markup=builder.as_markup(),
         )
-        await callback_query.answer()
+        await safe_answer_callback(callback_query)
         logger.info(
             "[TARIFF_CFG] select_tariff_plan discount_validity_failed: "
             f"tg_id={tg_id} tariff_id={tariff_id} result={validity_result}"
@@ -867,6 +869,7 @@ async def select_tariff_plan(callback_query: CallbackQuery, session: Any, state:
 )
 async def handle_user_devices_choice(callback: CallbackQuery, state: FSMContext, session: Any):
     """Обрабатывает выбор лимита устройств в конфигураторе."""
+    await safe_answer_callback(callback)
     _, _tariff_id_str, devices_str = callback.data.split("|", 2)
     devices = int(devices_str)
 
@@ -875,7 +878,6 @@ async def handle_user_devices_choice(callback: CallbackQuery, state: FSMContext,
         await state.update_data(config_tariff_id=int(_tariff_id_str))
     current = data.get("config_selected_device_limit")
     if current is not None and int(current) == devices:
-        await callback.answer()
         return
 
     await state.update_data(config_selected_device_limit=devices)
@@ -888,6 +890,7 @@ async def handle_user_devices_choice(callback: CallbackQuery, state: FSMContext,
 )
 async def handle_user_traffic_choice(callback: CallbackQuery, state: FSMContext, session: Any):
     """Обрабатывает выбор лимита трафика в конфигураторе."""
+    await safe_answer_callback(callback) 
     _, _tariff_id_str, traffic_str = callback.data.split("|", 2)
     traffic = int(traffic_str)
 
@@ -896,7 +899,6 @@ async def handle_user_traffic_choice(callback: CallbackQuery, state: FSMContext,
         await state.update_data(config_tariff_id=int(_tariff_id_str))
     current = data.get("config_selected_traffic_gb")
     if current is not None and int(current) == traffic:
-        await callback.answer()
         return
 
     await state.update_data(config_selected_traffic_gb=traffic)

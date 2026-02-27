@@ -109,27 +109,20 @@ def _run_with_api_in_thread(
         loop.close()
 
 
-def invalidate_remnawave_profile_cache(*, api_url: str | None = None, client_id: str | None = None) -> None:
-    """Invalidate cached Remnawave profiles by api_url/client_id (or both)."""
-    import asyncio
-
-    async def _invalidate_async() -> None:
-        if api_url is None and client_id is None:
-            await cache_delete_pattern("remna_profile:*")
-            return
-        if api_url is not None and client_id is not None:
-            await cache_delete_pattern(f"remna_profile:{api_url}:{client_id}")
-            return
-        if api_url is not None:
-            await cache_delete_pattern(f"remna_profile:{api_url}:*")
-            return
-        await cache_delete_pattern(f"remna_profile:*:{client_id}")
-
-    try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(_invalidate_async())
-    except RuntimeError:
+async def invalidate_remnawave_profile_cache(
+    *, api_url: str | None = None, client_id: str | None = None
+) -> None:
+    """Invalidate cached Remnawave profiles by api_url/client_id (or both). Await to avoid pending task on shutdown."""
+    if api_url is None and client_id is None:
+        await cache_delete_pattern("remna_profile:*")
         return
+    if api_url is not None and client_id is not None:
+        await cache_delete_pattern(f"remna_profile:{api_url}:{client_id}")
+        return
+    if api_url is not None:
+        await cache_delete_pattern(f"remna_profile:{api_url}:*")
+        return
+    await cache_delete_pattern(f"remna_profile:*:{client_id}")
 
 
 async def resolve_remnawave_api_url(
@@ -204,9 +197,9 @@ async def invalidate_remnawave_profile(
 ) -> None:
     api_url = await resolve_remnawave_api_url(session, server_ref, fallback_any=fallback_any)
     if api_url:
-        invalidate_remnawave_profile_cache(api_url=api_url, client_id=client_id)
+        await invalidate_remnawave_profile_cache(api_url=api_url, client_id=client_id)
     else:
-        invalidate_remnawave_profile_cache(client_id=client_id)
+        await invalidate_remnawave_profile_cache(client_id=client_id)
 
 
 async def with_remnawave_api(
