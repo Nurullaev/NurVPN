@@ -7,7 +7,7 @@ from middlewares.ban_checker import BanCheckerMiddleware
 from middlewares.subscription import SubscriptionMiddleware
 
 from .admin import AdminMiddleware
-from .answer import CallbackAnswerMiddleware
+from .answer import CallbackAnswerMiddleware, EarlyCallbackAnswerMiddleware
 from .concurrency import ConcurrencyLimiterMiddleware
 from .direct_start_blocker import DirectStartBlockerMiddleware
 from .loggings import LoggingMiddleware
@@ -59,6 +59,9 @@ def register_middleware(
 
     if PROBE_LOGGING:
         dispatcher.update.outer_middleware(StreamProbeMiddleware("global"))
+
+    # Первым делом отвечаем на callback, чтобы не уйти в «query is too old» при очереди
+    dispatcher.update.outer_middleware(EarlyCallbackAnswerMiddleware())
 
     if middleware_enabled("runtime_config_sync"):
         dispatcher.update.outer_middleware(wrap(RuntimeConfigSyncMiddleware(), "runtime_config_sync"))

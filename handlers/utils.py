@@ -38,6 +38,12 @@ _CALLBACK_ANSWER_IGNORE = (
     "query id is invalid",
 )
 
+_MESSAGE_NOT_MODIFIED = "message is not modified"
+
+
+def _is_message_not_modified(exc: BaseException) -> bool:
+    return isinstance(exc, TelegramBadRequest) and _MESSAGE_NOT_MODIFIED in str(exc).lower()
+
 
 async def safe_answer_callback(callback_query: CallbackQuery, text: str | None = None, show_alert: bool = False, **kwargs) -> None:
     """
@@ -298,7 +304,9 @@ async def edit_or_send_message(
                             InputMediaAnimation(media=cached_id, caption=text), reply_markup=reply_markup
                         )
                     return
-                except Exception:
+                except Exception as e:
+                    if _is_message_not_modified(e):
+                        return
                     try:
                         if media_type == "photo":
                             await target_message.answer_photo(
@@ -342,7 +350,9 @@ async def edit_or_send_message(
                     msg = await target_message.edit_media(
                         InputMediaAnimation(media=upload, caption=text), reply_markup=reply_markup
                     )
-            except Exception:
+            except Exception as e:
+                if _is_message_not_modified(e):
+                    return
                 if media_type == "photo":
                     msg = await target_message.answer_photo(
                         photo=upload,
@@ -385,7 +395,9 @@ async def edit_or_send_message(
         try:
             await target_message.edit_caption(caption=text, reply_markup=reply_markup)
             return
-        except Exception:
+        except Exception as e:
+            if _is_message_not_modified(e):
+                return
             pass
     try:
         await target_message.edit_text(
@@ -394,7 +406,9 @@ async def edit_or_send_message(
             disable_web_page_preview=disable_web_page_preview,
         )
         return
-    except Exception:
+    except Exception as e:
+        if _is_message_not_modified(e):
+            return
         await target_message.answer(
             text=text,
             reply_markup=reply_markup,

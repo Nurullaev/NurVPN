@@ -33,7 +33,7 @@ class ConcurrencyLimiterMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
-        if isinstance(event, CallbackQuery):
+        if isinstance(event, CallbackQuery) and not data.get("callback_answered_early"):
             bot: Bot | None = data.get("bot")
             if bot:
                 try:
