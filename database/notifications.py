@@ -121,16 +121,17 @@ async def get_last_notification_times_bulk(
         return {}
     from sqlalchemy import tuple_
 
-    stmt = select(
-        Notification.tg_id,
-        Notification.notification_type,
-        Notification.last_notification_time,
-    ).where(tuple_(Notification.tg_id, Notification.notification_type).in_(pairs))
-    result = await session.execute(stmt)
     out = {}
-    for tg_id, ntype, last_time in result.all():
-        if last_time:
-            out[(tg_id, ntype)] = int(last_time.timestamp() * 1000)
+    for chunk in _batched_list(pairs, _BULK_NOTIFICATION_BATCH_SIZE):
+        stmt = select(
+            Notification.tg_id,
+            Notification.notification_type,
+            Notification.last_notification_time,
+        ).where(tuple_(Notification.tg_id, Notification.notification_type).in_(chunk))
+        result = await session.execute(stmt)
+        for tg_id, ntype, last_time in result.all():
+            if last_time:
+                out[(tg_id, ntype)] = int(last_time.timestamp() * 1000)
     return out
 
 
