@@ -70,6 +70,9 @@ async def bulk_add_notifications(
     logger.info(f"✅ Bulk: добавлено/обновлено {len(items)} уведомлений")
 
 
+INACTIVE_TRIAL_REGISTERED_TYPE = "inactive_trial_registered"
+
+
 async def bulk_delete_notifications(
     session: AsyncSession, items: list[tuple[int, str]], *, commit: bool = False
 ) -> None:
@@ -268,6 +271,100 @@ async def check_notifications_bulk(
 
     try:
         now = datetime.utcnow()
+
+        if notification_type == "inactive_trial":
+            stmt_inactive = (
+                select(User.tg_id)
+                .where(
+                    and_(
+                        User.trial.in_([0, -1]),
+                        ~User.tg_id.in_(select(BlockedUser.tg_id)),
+                        ~User.tg_id.in_(select(Key.tg_id.distinct())),
+                    )
+                )
+            )
+            result_inactive = await session.execute(stmt_inactive)
+            inactive_tg_ids = [r[0] for r in result_inactive.all()]
+            if inactive_tg_ids:
+                existing = await session.execute(
+                    select(Notification.tg_id).where(
+                        Notification.notification_type == INACTIVE_TRIAL_REGISTERED_TYPE,
+                        Notification.tg_id.in_(inactive_tg_ids),
+                    )
+                )
+                already = {r[0] for r in existing.all()}
+                to_register = [tid for tid in inactive_tg_ids if tid not in already]
+                if to_register:
+                    await bulk_add_notifications(
+                        session,
+                        [(tid, INACTIVE_TRIAL_REGISTERED_TYPE) for tid in to_register],
+                        commit=True,
+                    )
+                    logger.info(f"Зарегистрировано как неактивные (шаг 1): {len(to_register)} пользователей.")
+
+            subq_registered = (
+                select(
+                    Notification.tg_id,
+                    func.max(Notification.last_notification_time).label("registered_time"),
+                )
+                .where(Notification.notification_type == INACTIVE_TRIAL_REGISTERED_TYPE)
+                .group_by(Notification.tg_id)
+                .subquery()
+            )
+            subq_sent = (
+                select(
+                    Notification.tg_id,
+                    func.max(Notification.last_notification_time).label("last_notification_time"),
+                )
+                .where(Notification.notification_type == notification_type)
+                .group_by(Notification.tg_id)
+                .subquery()
+            )
+            stmt = (
+                select(
+                    User.tg_id,
+                    Key.email,
+                    User.username,
+                    User.first_name,
+                    User.last_name,
+                    subq_registered.c.registered_time,
+                    subq_sent.c.last_notification_time,
+                )
+                .select_from(User)
+                .outerjoin(Key, Key.tg_id == User.tg_id)
+                .outerjoin(subq_registered, subq_registered.c.tg_id == User.tg_id)
+                .outerjoin(subq_sent, subq_sent.c.tg_id == User.tg_id)
+                .where(
+                    and_(
+                        User.trial.in_([0, -1]),
+                        ~User.tg_id.in_(select(BlockedUser.tg_id)),
+                        ~User.tg_id.in_(select(Key.tg_id.distinct())),
+                    )
+                )
+            )
+            result = await session.execute(stmt)
+            users = []
+            for row in result:
+                registered_time = row.registered_time
+                last_sent_time = row.last_notification_time
+                first_ok = (
+                    registered_time is not None
+                    and (now - registered_time) >= timedelta(hours=hours)
+                    and last_sent_time is None
+                )
+                second_ok = last_sent_time is not None and (now - last_sent_time) > timedelta(hours=hours)
+                if first_ok or second_ok:
+                    users.append({
+                        "tg_id": row.tg_id,
+                        "email": row.email,
+                        "username": row.username,
+                        "first_name": row.first_name,
+                        "last_name": row.last_name,
+                        "last_notification_time": int(last_sent_time.timestamp() * 1000) if last_sent_time else None,
+                    })
+            logger.info(f"Найдено {len(users)} пользователей, готовых к уведомлению типа {notification_type}")
+            return users
+
         subq_last_notification = (
             select(Notification.tg_id, func.max(Notification.last_notification_time).label("last_notification_time"))
             .where(Notification.notification_type == notification_type)
@@ -289,19 +386,14 @@ async def check_notifications_bulk(
                 .outerjoin(Key, Key.tg_id == User.tg_id)
                 .outerjoin(subq_last_notification, subq_last_notification.c.tg_id == User.tg_id)
             )
-            if notification_type == "inactive_trial":
-                stmt = stmt.where(
-                    and_(
-                        User.trial.in_([0, -1]),
-                        ~User.tg_id.in_(select(BlockedUser.tg_id)),
-                        ~User.tg_id.in_(select(Key.tg_id.distinct())),
-                    )
-                )
             if tg_ids_batch:
                 stmt = stmt.where(User.tg_id.in_(tg_ids_batch))
             if emails_batch:
                 stmt = stmt.where(Key.email.in_(emails_batch))
             return stmt
+
+        def _can_notify(last_time):
+            return last_time is None or (now - last_time) > timedelta(hours=hours)
 
         users: list[dict] = []
         seen: set[tuple[int, str | None]] = set()
@@ -316,8 +408,7 @@ async def check_notifications_bulk(
                         continue
                     seen.add(key)
                     last_time = row.last_notification_time
-                    can_notify = not last_time or (now - last_time > timedelta(hours=hours))
-                    if can_notify:
+                    if _can_notify(last_time):
                         users.append({
                             "tg_id": row.tg_id,
                             "email": row.email,
@@ -337,8 +428,7 @@ async def check_notifications_bulk(
                             continue
                         seen.add(key)
                         last_time = row.last_notification_time
-                        can_notify = not last_time or (now - last_time > timedelta(hours=hours))
-                        if can_notify:
+                        if _can_notify(last_time):
                             users.append({
                                 "tg_id": row.tg_id,
                                 "email": row.email,
@@ -357,8 +447,7 @@ async def check_notifications_bulk(
                         continue
                     seen.add(key)
                     last_time = row.last_notification_time
-                    can_notify = not last_time or (now - last_time > timedelta(hours=hours))
-                    if can_notify:
+                    if _can_notify(last_time):
                         users.append({
                             "tg_id": row.tg_id,
                             "email": row.email,
@@ -377,8 +466,7 @@ async def check_notifications_bulk(
                         continue
                     seen.add(key)
                     last_time = row.last_notification_time
-                    can_notify = not last_time or (now - last_time > timedelta(hours=hours))
-                    if can_notify:
+                    if _can_notify(last_time):
                         users.append({
                             "tg_id": row.tg_id,
                             "email": row.email,
@@ -392,8 +480,7 @@ async def check_notifications_bulk(
             result = await session.execute(stmt)
             for row in result:
                 last_time = row.last_notification_time
-                can_notify = not last_time or (now - last_time > timedelta(hours=hours))
-                if can_notify:
+                if _can_notify(last_time):
                     users.append({
                         "tg_id": row.tg_id,
                         "email": row.email,

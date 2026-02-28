@@ -8,13 +8,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardButton, Message, Update
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from bot import bot
 from config import CHANNEL_EXISTS, CHANNEL_ID, CHANNEL_REQUIRED, CHANNEL_URL
 from core.bootstrap import MODES_CONFIG
-from core.cache_config import (
-    SUBSCRIPTION_CACHE_SUBSCRIBED_TTL_SEC,
-    SUBSCRIPTION_CACHE_UNSUBSCRIBED_TTL_SEC,
-)
-from core.redis_cache import cache_delete, cache_get, cache_key, cache_set
 from handlers.buttons import SUB_CHANELL, SUB_CHANELL_DONE
 from handlers.texts import SUBSCRIPTION_REQUIRED_MSG
 from handlers.utils import edit_or_send_message
@@ -22,10 +18,6 @@ from logger import logger
 
 
 class SubscriptionMiddleware(BaseMiddleware):
-    def __init__(self) -> None:
-        self._subscribed_ttl = SUBSCRIPTION_CACHE_SUBSCRIBED_TTL_SEC
-        self._unsubscribed_ttl = SUBSCRIPTION_CACHE_UNSUBSCRIBED_TTL_SEC
-
     async def __call__(
         self,
         handler: Callable[[Update, dict[str, Any]], Awaitable[Any]],
@@ -65,50 +57,18 @@ class SubscriptionMiddleware(BaseMiddleware):
         else:
             return await handler(event, data)
 
-        cached_status = await self._get_cached_status(tg_id)
-        if cached_status is False:
-            logger.info(f"[SubMiddleware] Пользователь {tg_id} не подписан (cache)")
-            await self._store_user_state(data, message, from_user)
-            return await self._ask_to_subscribe(message)
-        if cached_status is True:
-            return await handler(event, data)
-
-        bot = data.get("bot")
-        if bot is None:
-            return await handler(event, data)
-
         try:
             member = await bot.get_chat_member(CHANNEL_ID, tg_id)
-            is_subscribed = member.status in ("member", "administrator", "creator")
-            await self._cache_status(tg_id, is_subscribed)
-            if not is_subscribed:
+            if member.status not in ("member", "administrator", "creator"):
                 logger.info(f"[SubMiddleware] Пользователь {tg_id} не подписан")
                 await self._store_user_state(data, message, from_user)
                 return await self._ask_to_subscribe(message)
         except (TelegramBadRequest, TelegramForbiddenError) as e:
-            logger.warning(f"[SubMiddleware] Ошибка проверки подписки {tg_id}, пропускаем: {e}")
-            return await handler(event, data)
+            logger.warning(f"[SubMiddleware] Ошибка при проверке подписки {tg_id}: {e}")
+            await self._store_user_state(data, message, from_user)
+            return await self._ask_to_subscribe(message)
 
         return await handler(event, data)
-
-    async def _get_cached_status(self, tg_id: int) -> bool | None:
-        subscribed_key = cache_key("subscribed", tg_id)
-        unsubscribed_key = cache_key("unsubscribed", tg_id)
-        if await cache_get(subscribed_key) is not None:
-            return True
-        if await cache_get(unsubscribed_key) is not None:
-            return False
-        return None
-
-    async def _cache_status(self, tg_id: int, is_subscribed: bool) -> None:
-        subscribed_key = cache_key("subscribed", tg_id)
-        unsubscribed_key = cache_key("unsubscribed", tg_id)
-        if is_subscribed:
-            await cache_delete(unsubscribed_key)
-            await cache_set(subscribed_key, 1, self._subscribed_ttl)
-        else:
-            await cache_delete(subscribed_key)
-            await cache_set(unsubscribed_key, 1, self._unsubscribed_ttl)
 
     async def _store_user_state(self, data: dict, message: Message, from_user):
         state: FSMContext = data.get("state")

@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -111,7 +112,9 @@ async def store_key(
                 current_device_limit=current_device_limit,
                 current_traffic_limit=current_traffic_limit,
             )
-            session.add(new_key)
+            add_result = session.add(new_key)
+            if asyncio.iscoroutine(add_result):
+                await add_result
             logger.info(f"[Store Key] Ключ создан: tg_id={tg_id}, client_id={client_id}, server_id={server_id}")
 
         await session.commit()
