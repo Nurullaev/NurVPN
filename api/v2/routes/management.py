@@ -15,8 +15,8 @@ from sqlalchemy import distinct, exists, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.depends import get_session, verify_identity_admin, verify_identity_admin_short
-from database import async_session_maker
 from config import API_TOKEN, BOT_SERVICE
+from database import async_session_maker, save_blocked_user_ids
 from core.bootstrap import MANAGEMENT_CONFIG
 from core.executor import run_io
 from core.settings.management_config import update_management_config
@@ -201,6 +201,13 @@ async def launch_broadcast(
     rate = max(1, min(int(payload.messages_per_second or 35), 60))
     broadcast_service = BroadcastService(bot=bot, session=None, messages_per_second=rate)
     stats = await broadcast_service.broadcast(messages, workers=workers)
+    blocked_ids = stats.get("blocked_user_ids") or []
+    if blocked_ids:
+        async with async_session_maker() as session:
+            try:
+                await save_blocked_user_ids(session, blocked_ids)
+            except Exception:
+                pass
     return {
         "success": True,
         "message": "Broadcast completed",

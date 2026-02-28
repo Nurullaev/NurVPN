@@ -12,7 +12,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, Teleg
 from aiogram.types import InlineKeyboardMarkup
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import async_session_maker
+from database import async_session_maker, save_blocked_user_ids
 from logger import logger
 
 
@@ -208,24 +208,12 @@ class BroadcastService:
     async def _save_blocked_users(self) -> None:
         if not self.blocked_users:
             return
-
-        async def _do_save(session: AsyncSession) -> None:
-            from sqlalchemy.dialects.postgresql import insert
-
-            from database.models import BlockedUser
-
-            values = [{"tg_id": tg_id} for tg_id in self.blocked_users]
-            stmt = insert(BlockedUser).values(values).on_conflict_do_nothing(index_elements=[BlockedUser.tg_id])
-            await session.execute(stmt)
-            await session.commit()
-            logger.info(f"📝 Добавлено {len(self.blocked_users)} пользователей в blocked_users")
-
         try:
             if self._session is not None:
-                await _do_save(self._session)
+                await save_blocked_user_ids(self._session, list(self.blocked_users))
             else:
                 async with async_session_maker() as session:
-                    await _do_save(session)
+                    await save_blocked_user_ids(session, list(self.blocked_users))
         except Exception as e:
             logger.error(f"❌ Ошибка при сохранении заблокированных пользователей: {e}")
             if self._session is not None:
@@ -316,7 +304,8 @@ class BroadcastService:
 
         await asyncio.gather(*worker_tasks, delayed_task, return_exceptions=True)
 
-        await self._save_blocked_users()
+        if self._session is not None:
+            await self._save_blocked_users()
 
         end_time = time.time()
         total_duration = end_time - self.start_time
@@ -331,6 +320,7 @@ class BroadcastService:
             "avg_speed": avg_speed,
             "total_messages": len(messages),
             "blocked_users": len(self.blocked_users),
+            "blocked_user_ids": list(self.blocked_users),
         }
 
         logger.info(

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import API_TOKEN
 from core.executor import run_io, should_run_heavy_tasks_separately
+from database import save_blocked_user_ids
 from database.models import Server
 from filters.admin import IsAdminFilter
 from logger import logger
@@ -230,6 +231,11 @@ async def handle_broadcast_confirm(callback_query: CallbackQuery, state: FSMCont
             state_keyboard_data,
             progress_cb,
         )
+        if stats.get("blocked_user_ids"):
+            try:
+                await save_blocked_user_ids(session, stats["blocked_user_ids"])
+            except Exception as e:
+                logger.error(f"❌ Ошибка при сохранении заблокированных пользователей: {e}")
     else:
         messages = []
         for tg_id in tg_ids:
